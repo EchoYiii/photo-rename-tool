@@ -1,0 +1,13 @@
+fastapi==0.115.12
+uvicorn==0.34.2
+python-multipart==0.0.20
+pillow==11.2.1
+torch==2.11.0
+torchvision==0.26.0
+transformers==4.57.3
+huggingface-hub==0.35.3
+numpy==2.2.5
+pydantic==2.11.4
+python-dotenv==1.1.0
+einops==0.8.2
+timm==1.0.26

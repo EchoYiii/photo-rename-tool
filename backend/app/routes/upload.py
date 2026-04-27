@@ -1,0 +1,321 @@
+"""Directory processing routes."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import re
+from datetime import datetime
+from uuid import uuid4
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+import torch
+
+from ..core.config import settings
+from ..services.image_recognition import get_recognition_service
+from ..services.translation import get_translation_service
+from ..utils.file_handler import (
+    build_unique_output_path,
+    build_unique_path_for_name,
+    copy_to_output,
+    ensure_directory,
+    get_file_extension,
+    iter_image_files,
+    get_camera_make,
+    classify_photo_type,
+    LABEL_TRANSLATIONS,
+    PHOTO_TYPE_TRANSLATIONS,
+)
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/v1", tags=["processing"])
+
+JOB_STORE: dict[str, dict] = {}
+
+
+def translate_label(label: str, language: str) -> str:
+    """Translate a label to the specified language.
+    
+    Uses the advanced TranslationService for better matching and handling of compound labels.
+    
+    Args:
+        label: The English label to translate
+        language: Target language ('en' for English, 'zh' for Chinese)
+        
+    Returns:
+        Translated label if found, otherwise original label
+    """
+    if not isinstance(label, str):
+        return label
+    
+    # Get translation service and use it for translation
+    translation_service = get_translation_service()
+    return translation_service.translate(label, language)
+
+
+# Camera brand should remain in its original (English) form; do not translate.
+
+
+class DirectoryProcessRequest(BaseModel):
+    source_path: str = Field(..., description="Directory containing images to process.")
+    output_path: str = Field(..., description="Directory to write renamed images into.")
+    recursive: bool = Field(default=True, description="Whether to scan subdirectories.")
+    confidence_threshold: float = Field(default=settings.CONFIDENCE_THRESHOLD, ge=0.0, le=1.0)
+    # Allow clients to submit any integer >=1 and clamp server-side to the configured maximum.
+    max_labels: int = Field(default=settings.MAX_LABELS, ge=1)
+    include_camera: bool = Field(default=True, description="Include camera manufacturer in filename.")
+    include_type: bool = Field(default=True, description="Include photo type in filename.")
+    include_elements: bool = Field(default=True, description="Include AI-recognized elements in filename.")
+    label_language: str = Field(default="en", description="Language for labels: 'en' for English, 'zh' for Chinese.")
+
+
+def _create_job_record(job_id: str, payload: DirectoryProcessRequest, source_dir: str, output_dir: str, total: int) -> dict:
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "message": "Task queued.",
+        "source_path": source_dir,
+        "output_path": output_dir,
+        "model": settings.MODEL_NAME,
+        "validation_model": settings.VALIDATION_MODEL_NAME,
+        "confidence_threshold": payload.confidence_threshold,
+        "max_labels": payload.max_labels,
+        "total": total,
+        "processed": 0,
+        "progress_percentage": 0,
+        "successful": 0,
+        "failed": 0,
+        "results": [],
+        "errors": [],
+        "started_at": datetime.utcnow().isoformat() + "Z",
+        "completed_at": None,
+    }
+
+
+def _update_job_progress(job: dict, processed: int, total: int, message: str) -> None:
+    job["processed"] = processed
+    job["total"] = total
+    job["progress_percentage"] = int((processed / total) * 100) if total else 100
+    job["message"] = message
+
+
+def _process_directory_sync(job_id: str, payload: DirectoryProcessRequest, image_paths: list[str], output_dir: str) -> None:
+    job = JOB_STORE[job_id]
+    job["status"] = "running"
+    job["message"] = "Loading recognition models."
+
+    recognition_service = get_recognition_service(
+        settings.MODEL_NAME,
+        settings.VALIDATION_MODEL_NAME,
+        settings.DEVICE_PREFERENCE,
+        use_fast=True,
+    )
+    job["device"] = recognition_service.device
+
+    total = len(image_paths)
+    results: list[dict] = []
+    errors: list[dict] = []
+
+    for index, image_path in enumerate(image_paths):
+        original_name = os.path.basename(image_path)
+        _update_job_progress(job, index, total, f"Processing {index + 1}/{total}: {original_name}")
+        try:
+            requested_max_labels = min(payload.max_labels, settings.MAX_LABELS)
+            recognition = recognition_service.recognize_image(
+                image_path=image_path,
+                confidence_threshold=payload.confidence_threshold,
+                max_labels=requested_max_labels,
+            )
+            labels = [item["label"] for item in recognition.get("labels", [])]
+            
+            # 根据用户选择构建标签列表
+            final_labels = []
+            language = payload.label_language
+            
+            # 1. 相机制造商（如果用户选择包含）
+            if payload.include_camera:
+                camera_make = get_camera_make(image_path)
+                if camera_make:
+                    # 保持相机品牌始终为原始英文表示（不随语言切换）
+                    final_labels.append(camera_make)
+                else:
+                    final_labels.append("unknown")
+            
+            # 2. 照片类型（如果用户选择包含）
+            if payload.include_type:
+                photo_type = classify_photo_type([item["label"] for item in recognition.get("labels", [])], language=language)
+                if photo_type:
+                    # 将照片类型转换为文件名安全的格式
+                    sanitized_type = "_".join(photo_type.lower().split())
+                    final_labels.append(sanitized_type)
+            
+            # 3. AI识别的元素（如果用户选择包含）- 使用选定的语言
+            if payload.include_elements:
+                for label in labels:
+                    translated_label = translate_label(label, language)
+                    final_labels.append(translated_label)
+            
+            # 使用构建的标签列表
+            labels = final_labels
+            if not labels:
+                output_path = build_unique_path_for_name(output_dir, original_name)
+                copy_to_output(image_path, output_path)
+                results.append(
+                    {
+                        "index": index,
+                        "source_path": image_path,
+                        "output_path": output_path,
+                        "original_filename": original_name,
+                        "renamed_filename": os.path.basename(output_path),
+                        "labels": [],
+                        "status": "kept_original_name",
+                        "message": "No elements met the confidence threshold, so the original filename was kept.",
+                    }
+                )
+            else:
+                extension = get_file_extension(original_name) or "jpg"
+                output_path = build_unique_output_path(output_dir, labels, extension)
+                copy_to_output(image_path, output_path)
+                # 翻译并构造返回给前端的标签列表（用于 UI 显示）
+                display_labels = []
+                for item in recognition.get("labels", []):
+                    lab = item.get("label", "")
+                    display = translate_label(lab, language)
+                    display_labels.append(
+                        {
+                            "label": display,
+                            "confidence_percentage": item.get("confidence_percentage", round(item.get("score", 0) * 100, 2)),
+                        }
+                    )
+
+                results.append(
+                    {
+                        "index": index,
+                        "source_path": image_path,
+                        "output_path": output_path,
+                        "original_filename": original_name,
+                        "renamed_filename": os.path.basename(output_path),
+                        "labels": display_labels,
+                        "status": "renamed",
+                    }
+                )
+        except Exception as exc:  # pragma: no cover - defensive error surface
+            logger.exception("Failed to process %s", image_path)
+            errors.append(
+                {
+                    "index": index,
+                    "source_path": image_path,
+                    "filename": original_name,
+                    "error": str(exc),
+                }
+            )
+
+        job["results"] = results
+        job["errors"] = errors
+        job["successful"] = len(results)
+        job["failed"] = len(errors)
+        _update_job_progress(job, index + 1, total, f"Processed {index + 1}/{total}: {original_name}")
+
+    job["status"] = "completed"
+    job["completed_at"] = datetime.utcnow().isoformat() + "Z"
+    job["message"] = "Processing completed."
+    job["progress_percentage"] = 100
+
+
+async def _run_directory_job(job_id: str, payload: DirectoryProcessRequest, image_paths: list[str], output_dir: str) -> None:
+    try:
+        await asyncio.to_thread(_process_directory_sync, job_id, payload, image_paths, output_dir)
+    except Exception as exc:  # pragma: no cover - defensive error surface
+        logger.exception("Directory job %s failed", job_id)
+        job = JOB_STORE[job_id]
+        job["status"] = "failed"
+        job["message"] = str(exc)
+        job["completed_at"] = datetime.utcnow().isoformat() + "Z"
+
+
+@router.post("/process-directory")
+async def process_directory(payload: DirectoryProcessRequest) -> dict:
+    """Create a background directory processing job."""
+    # Clamp client-provided values to server configuration to avoid 422 validation errors
+    try:
+        payload.max_labels = int(min(payload.max_labels, settings.MAX_LABELS))
+        source_dir = os.path.abspath(os.path.expanduser(payload.source_path.strip()))
+        output_dir = ensure_directory(payload.output_path)
+        image_paths = iter_image_files(source_dir, recursive=payload.recursive)
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid path configuration: {exc}") from exc
+
+    if not image_paths:
+        raise HTTPException(status_code=400, detail="No supported image files were found in the source directory.")
+
+    job_id = uuid4().hex
+    JOB_STORE[job_id] = _create_job_record(job_id, payload, source_dir, output_dir, len(image_paths))
+    asyncio.create_task(_run_directory_job(job_id, payload, image_paths, output_dir))
+
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "total": len(image_paths),
+        "progress_percentage": 0,
+        "message": "Task queued.",
+    }
+
+
+@router.get("/process-directory/{job_id}")
+async def get_directory_job(job_id: str) -> dict:
+    """Fetch the current status of a directory processing job."""
+    job = JOB_STORE.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return job
+
+
+@router.get("/health")
+async def health_check() -> dict:
+    """Service health information."""
+    return {
+        "status": "healthy",
+        "model": settings.MODEL_NAME,
+        "validation_model": settings.VALIDATION_MODEL_NAME,
+        "confidence_threshold": settings.CONFIDENCE_THRESHOLD,
+        "max_labels": settings.MAX_LABELS,
+        "device_preference": settings.DEVICE_PREFERENCE,
+    }
+
+
+@router.get("/info")
+async def get_info() -> dict:
+    """Frontend configuration payload."""
+    model_source = settings.MODEL_NAME
+    validation_source = settings.VALIDATION_MODEL_NAME
+    device = "unknown"
+    try:
+        recognition_service = get_recognition_service(
+            settings.MODEL_NAME,
+            settings.VALIDATION_MODEL_NAME,
+            settings.DEVICE_PREFERENCE,
+            use_fast=True,
+        )
+        model_source = recognition_service.model_source
+        validation_source = recognition_service.validation_model_source
+        device = recognition_service.device
+    except Exception:
+        logger.warning("Recognition service was not ready while building /info payload.", exc_info=True)
+
+    return {
+        "model": settings.MODEL_NAME,
+        "validation_model": settings.VALIDATION_MODEL_NAME,
+        "model_source": model_source,
+        "validation_model_source": validation_source,
+        "confidence_threshold": settings.CONFIDENCE_THRESHOLD,
+        "max_labels": settings.MAX_LABELS,
+        "device_preference": settings.DEVICE_PREFERENCE,
+        "device": device,
+        "cuda_available": torch.cuda.is_available(),
+        "torch_version": torch.__version__,
+        "allowed_extensions": sorted(settings.ALLOWED_EXTENSIONS),
+    }

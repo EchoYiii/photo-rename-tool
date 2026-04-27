@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>照片重命名工具</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <main class="app-shell">
+        <section class="hero">
+          <p class="eyebrow">Photo Rename Tool</p>
+          <h1>照片重命名工具</h1>
+          <p class="hero-copy">
+            面向本地批量整理场景，系统会逐张分析照片中的关键视觉元素，基于可调置信度筛选结果，
+            自动生成规范化文件名并输出到目标目录；当未识别出有效元素时，将保留原文件名输出。
+          </p>
+        </section>
+
+        <section class="workspace">
+          <form id="process-form" class="panel form-panel">
+            <div class="panel-head">
+              <h2>处理配置</h2>
+              <span>本地目录批处理</span>
+            </div>
+
+            <label class="field">
+              <span>源图片目录</span>
+              <input id="source_path" name="source_path" placeholder="例如：C:\Users\you\Pictures\raw" required />
+            </label>
+
+            <label class="field">
+              <span>输出目录</span>
+              <input id="output_path" name="output_path" placeholder="例如：D:\Photos\renamed" required />
+            </label>
+
+            <div class="settings-section">
+              <div class="settings-grid">
+                <div class="field confidence-field">
+                  <div class="confidence-head">
+                    <span>置信度阈值</span>
+                    <output id="confidence_display" for="confidence_threshold confidence_threshold_input">0.01</output>
+                  </div>
+                  <input id="confidence_threshold" name="confidence_threshold" type="range" min="0" max="1" step="0.01" value="0.01" />
+                  <input id="confidence_threshold_input" type="number" min="0" max="1" step="0.01" value="0.01" />
+                </div>
+
+                <div class="field max-labels-field">
+                  <div class="max-labels-head">
+                    <span>最多标签数</span>
+                  </div>
+                  <input id="max_labels" name="max_labels" type="number" min="1" max="10" step="1" value="3" />
+                </div>
+              </div>
+
+              <div class="form-section">
+                <p class="section-title">重命名选项</p>
+                <div class="options-grid">
+                  <label class="toggle-option">
+                    <input id="include_camera" name="include_camera" type="checkbox" checked />
+                    <span class="toggle-label">相机制造商</span>
+                    <span class="toggle-desc">包含相机品牌信息</span>
+                  </label>
+                  <label class="toggle-option">
+                    <input id="include_type" name="include_type" type="checkbox" checked />
+                    <span class="toggle-label">照片类型</span>
+                    <span class="toggle-desc">包含智能分类结果</span>
+                  </label>
+                  <label class="toggle-option">
+                    <input id="include_elements" name="include_elements" type="checkbox" checked />
+                    <span class="toggle-label">AI识别元素</span>
+                    <span class="toggle-desc">包含视觉元素标签</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="form-section">
+                <p class="section-title">标签语言</p>
+                <div class="options-grid">
+                  <label class="radio-option">
+                    <input id="label_language_en" name="label_language" type="radio" value="en" checked />
+                    <span class="radio-label">英文</span>
+                    <span class="radio-desc">使用英文标签</span>
+                  </label>
+                  <label class="radio-option">
+                    <input id="label_language_zh" name="label_language" type="radio" value="zh" />
+                    <span class="radio-label">中文</span>
+                    <span class="radio-desc">使用中文标签</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <label class="toggle">
+              <input id="recursive" name="recursive" type="checkbox" checked />
+              <span>递归扫描子目录</span>
+            </label>
+
+            <button id="submit-btn" class="primary-btn" type="submit">开始批量处理</button>
+          </form>
+
+          <aside class="panel meta-panel">
+            <div class="panel-head">
+              <h2>识别规则</h2>
+              <span>公开模型方案</span>
+            </div>
+            <div id="meta-list" class="meta-list"></div>
+          </aside>
+        </section>
+
+        <section id="progress-panel" class="panel progress-panel hidden">
+          <div class="panel-head">
+            <h2>处理进度</h2>
+            <span id="progress-label">0%</span>
+          </div>
+          <div class="progress-track">
+            <div id="progress-bar" class="progress-bar"></div>
+          </div>
+          <div class="progress-meta">
+            <span id="progress-message">等待开始</span>
+            <span id="progress-count">0 / 0</span>
+          </div>
+        </section>
+
+        <div id="banner" class="banner hidden"></div>
+        <section id="summary" class="summary-grid hidden"></section>
+        <section id="success-panel" class="panel hidden"></section>
+        <section id="error-panel" class="panel hidden"></section>
+      </main>
+    </div>
+
+    <script type="module" src="/assets/app.js"></script>
+  </body>
+</html>
