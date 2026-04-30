@@ -26,7 +26,6 @@ def test_frontend_integration():
         # Test that all expected models are present
         expected_models = [
             "florence-community/Florence-2-base-ft",
-            "florence-community/Florence-2-small",
             "Salesforce/blip-image-captioning-large",
             "nlpconnect/vit-gpt2-image-captioning"
         ]

@@ -19,7 +19,7 @@ class Settings:
     MAX_UPLOAD_SIZE = 50 * 1024 * 1024
     ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff"}
 
-    MODEL_NAME = os.getenv("MODEL_NAME", "florence-community/Florence-2-base-ft")
+    MODEL_NAME = os.getenv("MODEL_NAME", "nlpconnect/vit-gpt2-image-captioning")
     VALIDATION_MODEL_NAME = os.getenv(
         "VALIDATION_MODEL_NAME",
         "google/siglip2-base-patch16-224",
@@ -30,25 +30,13 @@ class Settings:
             "label": "Florence-2 base-ft（默认，准确）",
             "desc": "高准确度，多任务能力强；推荐 GPU（16GB+）或高性能 CPU。本地部署下载大。",
         },
-        "florence-community/Florence-2-small": {
-            "label": "Florence-2 small（更快，资源友好）",
-            "desc": "速度较快，适度准确；推荐 GPU（4-8GB）或多核 CPU，下载较小。",
-        },
         "Salesforce/blip-image-captioning-large": {
             "label": "BLIP 图像描述（快速、通用）",
             "desc": "通用图像描述能力，适合快速候选生成；推荐有 GPU（4-8GB）。",
         },
-        "Salesforce/blip2-flan-t5-large": {
-            "label": "BLIP-2 Flan-T5（强大，资源密集）",
-            "desc": "能力强但显存需求高；适合高质量生成与理解任务，需 16GB+ GPU。",
-        },
         "nlpconnect/vit-gpt2-image-captioning": {
             "label": "ViT-GPT2 图像描述（轻量、稳定）",
             "desc": "轻量级图像描述，资源需求低，可在 CPU 上运行但较慢。",
-        },
-        "openai/clip-vit-large-patch14": {
-            "label": "CLIP（相似度/候选校验）",
-            "desc": "用于图像-文本相似度；不用于直接生成标签，适合作为候选校验或筛选器。",
         },
     }
     DEVICE_PREFERENCE = os.getenv("DEVICE_PREFERENCE", "auto").lower()

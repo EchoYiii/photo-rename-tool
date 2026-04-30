@@ -17,6 +17,93 @@
   font-size: 0.9rem;
   font-weight: 700;
 }
+
+.settings-grid > .element-model-field {
+  grid-column: span 2 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(239, 251, 248, 0.9));
+  box-sizing: border-box;
+  margin-bottom: 16px;
+}
+
+.element-model-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.element-model-head span {
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.device-selector {
+  display: flex;
+  gap: 12px;
+}
+
+.device-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--muted);
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.device-option:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.device-option input[type="radio"] {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+.device-option input[type="radio"]:checked + span {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.element-model-field select {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 0.95rem;
+  color: var(--text);
+  appearance: auto;
+  -webkit-appearance: auto;
+  -moz-appearance: auto;
+  background: var(--panel-strong);
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.element-model-field select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(75, 179, 166, 0.15);
+}
+
+.element-model-field select:disabled {
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
 :root {
   color-scheme: light;
   --bg: #eef8f5;
@@ -342,6 +429,35 @@ input {
   opacity: 0.7;
 }
 
+.button-group {
+  display: flex;
+  gap: 10px;
+}
+
+.button-group .primary-btn,
+.button-group .danger-btn {
+  flex: 1;
+}
+
+.danger-btn {
+  padding: 14px 18px;
+  border: 0;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+  color: #f7fffd;
+  font-weight: 700;
+  box-shadow: 0 14px 30px rgba(220, 53, 69, 0.22);
+  cursor: pointer;
+}
+
+.danger-btn:hover {
+  background: linear-gradient(135deg, #c82333 0%, #bd2130 100%);
+}
+
+.danger-btn:disabled {
+  opacity: 0.7;
+}
+
 .meta-list {
   display: grid;
   gap: 14px;
@@ -404,7 +520,7 @@ input {
 
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px;
   margin-top: 20px;
 }

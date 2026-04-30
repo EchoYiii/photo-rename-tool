@@ -5,6 +5,7 @@ const errorPanel = document.getElementById('error-panel');
 const metaList = document.getElementById('meta-list');
 const form = document.getElementById('process-form');
 const submitButton = document.getElementById('submit-btn');
+const cancelButton = document.getElementById('cancel-btn');
 const confidenceRange = document.getElementById('confidence_threshold');
 const confidenceInput = document.getElementById('confidence_threshold_input');
 const confidenceDisplay = document.getElementById('confidence_display');
@@ -73,9 +74,7 @@ function stopPolling() {
 }
 
 function populateElementModelOptions(models, selectedModel) {
-  if (!elementModelSelect || !Array.isArray(models)) {
-    return;
-  }
+  if (!elementModelSelect || !Array.isArray(models)) {  return;}
 
   serverElementModels = models;
   elementModelSelect.innerHTML = '';
@@ -92,15 +91,12 @@ function populateElementModelOptions(models, selectedModel) {
   }
 
   models.forEach((item) => {
-    const label = `${item.label}${item.desc ? ' — ' + item.desc : ''}`;
-    const option = new Option(label, item.name, false, false);
+    const option = new Option(item.label, item.name, false, false);
     option.dataset.desc = item.desc || '';
     elementModelSelect.appendChild(option);
   });
 
-  const matchedModel = models.some((m) => m.name === selectedModel)
-    ? selectedModel
-    : models[0]?.name || '';
+  const matchedModel = models.some((m) => m.name === selectedModel)    ? selectedModel    : models[0]?.name || '';
   elementModelSelect.value = matchedModel;
   elementModelSelect.disabled = false;
 
@@ -160,7 +156,8 @@ function renderMeta(info) {
 
 function renderSummary(result) {
   summary.className = 'summary-grid';
-  summary.innerHTML = `
+
+  let summaryHTML = `
     <div class="summary-card">
       <span>扫描图片</span>
       <strong>${result.total}</strong>
@@ -174,6 +171,20 @@ function renderSummary(result) {
       <strong>${result.failed}</strong>
     </div>
   `;
+
+  const durationText = result.total_duration_formatted ||
+                       (result.total_duration_seconds ? `${result.total_duration_seconds} 秒` : null);
+
+  if (durationText) {
+    summaryHTML += `
+      <div class="summary-card">
+        <span>总耗时</span>
+        <strong>${durationText}</strong>
+      </div>
+    `;
+  }
+
+  summary.innerHTML = summaryHTML;
 }
 
 function renderSuccess(result) {
@@ -285,6 +296,7 @@ async function pollJob(jobId) {
       stopPolling();
       submitButton.disabled = false;
       submitButton.textContent = '开始批量处理';
+      cancelButton.classList.add('hidden');
       renderSummary(data);
       renderSuccess(data);
       renderErrors(data);
@@ -295,7 +307,17 @@ async function pollJob(jobId) {
       stopPolling();
       submitButton.disabled = false;
       submitButton.textContent = '开始批量处理';
+      cancelButton.classList.add('hidden');
       showBanner(data.message || '处理失败');
+      return;
+    }
+
+    if (data.status === 'cancelled') {
+      stopPolling();
+      submitButton.disabled = false;
+      submitButton.textContent = '开始批量处理';
+      cancelButton.classList.add('hidden');
+      showBanner('任务已取消');
       return;
     }
 
@@ -318,6 +340,7 @@ form.addEventListener('submit', async (event) => {
   resetProgress();
   submitButton.disabled = true;
   submitButton.textContent = '创建任务中...';
+  cancelButton.classList.remove('hidden');
 
   const maxLabelsRaw = Number(document.getElementById('max_labels').value) || 1;
   const maxLabelsCap = serverMaxLabels || Number(document.getElementById('max_labels').max) || 3;
@@ -335,6 +358,7 @@ form.addEventListener('submit', async (event) => {
     element_model:
       elementModelSelect?.value || elementModelSelect?.options?.[0]?.value || undefined,
     label_language: document.querySelector('input[name="label_language"]:checked').value,
+    device: document.querySelector('input[name="device"]:checked').value,
   };
 
   try {
@@ -359,6 +383,7 @@ form.addEventListener('submit', async (event) => {
     stopPolling();
     submitButton.disabled = false;
     submitButton.textContent = '开始批量处理';
+    cancelButton.classList.add('hidden');
     showBanner(error.message || '处理失败');
   }
 });
@@ -374,3 +399,36 @@ confidenceInput.addEventListener('input', (event) => {
 setConfidenceValue(0.01);
 resetProgress();
 fetchInfo();
+
+// 取消按钮事件处理
+cancelButton.addEventListener('click', async () => {
+  if (!activeJobId) {
+    return;
+  }
+
+  cancelButton.disabled = true;
+  cancelButton.textContent = '取消中...';
+
+  try {
+    const response = await fetch(`${apiBase}/process-directory/${activeJobId}/cancel`, {
+      method: 'POST',
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || '取消失败');
+    }
+
+    stopPolling();
+    submitButton.disabled = false;
+    submitButton.textContent = '开始批量处理';
+    cancelButton.classList.add('hidden');
+    cancelButton.disabled = false;
+    cancelButton.textContent = '取消任务';
+    showBanner('任务已取消');
+  } catch (error) {
+    cancelButton.disabled = false;
+    cancelButton.textContent = '取消任务';
+    showBanner(error.message || '取消失败');
+  }
+});

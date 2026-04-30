@@ -23,24 +23,28 @@ import re
 from pathlib import Path
 from typing import Optional, Any
 
+# Optimize CUDA memory usage - MUST SET BEFORE IMPORTING torch!
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import torch
 from PIL import Image
-from transformers import AutoProcessor, Florence2ForConditionalGeneration, pipeline
+from transformers import (
+    AutoProcessor,
+    AutoModelForCausalLM,
+    Blip2ForConditionalGeneration,
+    Florence2ForConditionalGeneration,
+    pipeline,
+)
 from transformers.modeling_utils import PreTrainedModel
 
 logger = logging.getLogger(__name__)
 
 # Florence-2 remote code can expect this attribute on older/newer transformer mixes.
 if not hasattr(PreTrainedModel, "_supports_sdpa"):
-    PreTrainedModel._supports_sdpa = False
+    PreTrainedModel._supports_sdpa = True
 
-STOPWORDS = {
-    "a", "an", "and", "at", "background", "blue", "by", "close", "day", "for",
-    "foreground", "from", "green", "group", "in", "large", "near", "of", "on",
-    "or", "photo", "scene", "small", "the", "to", "view", "white", "with"
-}
-
-FALLBACK_CANDIDATE_LABELS = [
+# Standard candidate labels for common elements in photos (in English).
+# These are used for zero-shot validation.
+CANDIDATE_LABELS = [
     "person", "portrait", "face", "group", "child", "baby",
     "dog", "cat", "bird", "horse", "cow", "sheep", "fish",
     "car", "truck", "bus", "train", "bicycle", "motorcycle", "airplane", "boat",
@@ -68,15 +72,16 @@ class ImageRecognitionService:
         self.validation_model_name = validation_model_name
         self.device = self._resolve_device(device_preference)
         self.dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
-        self.model_source = self._resolve_model_source(self.model_name)
-        self.validation_model_source = self._resolve_model_source(self.validation_model_name)
+        self.model_source = self._resolve_model_source(model_name)
+        self.validation_model_source = self._resolve_model_source(validation_model_name)
         self.processor: Optional[AutoProcessor] = None
-        self.caption_model: Optional[Florence2ForConditionalGeneration] = None
+        self.caption_model: Optional[Any] = None
         self.caption_pipe: Optional[Any] = None
         self.validation_pipe = None
         self.auth_token = use_auth_token
-        # Detect backend type: Florence vs general captioning pipelines
+        # Detect backend type: Florence vs BLIP-2 vs use pipeline fallback
         self.is_florence = "florence" in (self.model_name or "").lower()
+        self.is_blip2 = "blip2" in (self.model_name or "").lower()
         self.device_preference = device_preference
         self.use_fast = use_fast
         self._load_models()
@@ -93,9 +98,21 @@ class ImageRecognitionService:
         hf_kwargs = {}
         if self.auth_token:
             hf_kwargs["use_auth_token"] = self.auth_token
+        
+        # Set network timeout configuration
+        import os
+        hf_timeout = int(os.getenv("HF_TIMEOUT", "600"))  # 10 minutes default
+        hf_kwargs["timeout"] = hf_timeout
+        logger.info("HuggingFace timeout set to %d seconds", hf_timeout)
+
+        # Model loading parameters (no timeout to avoid compatibility issues)
+        model_kwargs = {}
+        if self.auth_token:
+            model_kwargs["use_auth_token"] = self.auth_token
 
         # Load validation pipeline (zero-shot classifier) - used by all backends
         try:
+            logger.info("Loading validation pipeline: %s", self.validation_model_source)
             self.validation_pipe = pipeline(
                 "zero-shot-image-classification",
                 model=self.validation_model_source,
@@ -104,289 +121,323 @@ class ImageRecognitionService:
                 use_fast=self.use_fast,
                 **hf_kwargs,
             )
+            logger.info("Validation pipeline loaded successfully")
         except Exception:
             logger.warning("Failed to load validation pipeline %s; continuing without it.", self.validation_model_source, exc_info=True)
 
         # Florence-2 has a specialized processor + generation class with multi-task support.
         if "florence" in (self.model_source or "").lower():
+            logger.info("=== Stage 1/3: Loading Florence-2 processor: %s ===", self.model_source)
             self.processor = AutoProcessor.from_pretrained(
                 self.model_source,
                 local_files_only=self._is_local_model_source(self.model_source),
+                trust_remote_code=True,
                 **hf_kwargs,
             )
+            logger.info("=== Stage 2/3: Processor loaded, now loading Florence-2 model (this may take several minutes on first run) ===")
             self.caption_model = Florence2ForConditionalGeneration.from_pretrained(
                 self.model_source,
                 torch_dtype=self.dtype,
                 attn_implementation="eager",
                 local_files_only=self._is_local_model_source(self.model_source),
-                **hf_kwargs,
+                trust_remote_code=True,
+                low_cpu_mem_usage=True,
+                **model_kwargs,
             ).to(self.device)
             self.caption_model.eval()
-        else:
-            # Generic captioning backend (BLIP, ViT-GPT2, etc.) — use the image-to-text pipeline.
+            logger.info("=== Stage 3/3: Florence-2 model loaded successfully ===")
+        elif self.is_blip2:
+            # BLIP-2 models require specialized loading with Blip2ForConditionalGeneration
             try:
-                self.caption_pipe = pipeline(
-                    "image-to-text",
-                    model=self.model_source,
-                    device=0 if self.device == "cuda" else -1,
-                    local_files_only=self._is_local_model_source(self.model_source),
+                logger.info("=== Stage 1/2: Loading BLIP-2 processor: %s ===", self.model_source)
+                self.processor = AutoProcessor.from_pretrained(
+                    self.model_source,
                     use_fast=self.use_fast,
                     **hf_kwargs,
                 )
-                # Generic pipelines don't require a separate processor/model on this side.
-                self.processor = None
-                self.caption_model = None
+                logger.info("=== Stage 2/2: Processor loaded, now loading BLIP-2 model (this may take several minutes on first run) ===")
+                self.caption_model = Blip2ForConditionalGeneration.from_pretrained(
+                    self.model_source,
+                    torch_dtype=self.dtype,
+                    low_cpu_mem_usage=True,
+                    **model_kwargs,
+                ).to(self.device)
+                self.caption_model.eval()
+                self.caption_pipe = None
+                logger.info("=== BLIP-2 model loaded successfully ===")
             except Exception as exc:
-                logger.exception("Failed to load generic caption pipeline for %s: %s", self.model_source, exc)
+                logger.exception("Failed to load BLIP-2 model for %s: %s", self.model_source, exc)
                 raise
+        else:
+            # Fallback strategy: first try AutoModelForCausalLM, if fails use image-to-text pipeline
+            try:
+                logger.info("=== Strategy 1: Trying AutoModelForCausalLM for %s ===", self.model_source)
+                self.processor = AutoProcessor.from_pretrained(
+                    self.model_source,
+                    use_fast=self.use_fast,
+                    **hf_kwargs,
+                )
+                self.caption_model = AutoModelForCausalLM.from_pretrained(
+                    self.model_source,
+                    torch_dtype=self.dtype,
+                    low_cpu_mem_usage=True,
+                    **model_kwargs,
+                ).to(self.device)
+                self.caption_model.eval()
+                self.caption_pipe = None
+                logger.info("=== Model loaded successfully with AutoModelForCausalLM ===")
+            except Exception as exc1:
+                logger.warning("AutoModelForCausalLM failed: %s, trying pipeline fallback", exc1)
+                try:
+                    logger.info("=== Strategy 2: Trying image-to-text pipeline ===")
+                    self.caption_pipe = pipeline(
+                        "image-to-text",
+                        model=self.model_source,
+                        device=0 if self.device == "cuda" else -1,
+                        **hf_kwargs,
+                    )
+                    logger.info("=== Model loaded successfully with image-to-text pipeline ===")
+                except Exception as exc2:
+                    logger.exception("Both strategies failed for %s", self.model_source)
+                    raise
 
     def recognize_image(
         self,
         image_path: str,
         confidence_threshold: float = 0.60,
         max_labels: int = 3,
-    ) -> dict:
-        try:
-            image = Image.open(image_path).convert("RGB")
-            candidates = self._generate_candidates(image, max_labels=max_labels)
-            candidates = candidates or FALLBACK_CANDIDATE_LABELS[:]
+    ) -> dict[str, Any]:
+        """Recognize elements in an image.
 
-            validated = self.validation_pipe(
-                image,
-                candidate_labels=candidates,
-            )
+        Args:
+            image_path: Path to the image file
+            confidence_threshold: Minimum confidence score (0-1)
+            max_labels: Maximum number of labels to return
 
-
-            def _similar(a: str, b: str) -> float:
-                # 简单相似度：Levenshtein距离/最大长度，返回1-归一化距离
-                try:
-                    import difflib
-                    return difflib.SequenceMatcher(None, a, b).ratio()
-                except Exception:
-                    return 0.0
-
-            labels = []
-            for item in validated:
-                score = float(item["score"])
-                if score < confidence_threshold:
-                    continue
-                cleaned = self._clean_label(item["label"])
-                if not cleaned:
-                    continue
-                # 新增：与已选标签做相似度去重
-                is_similar = False
-                for existing in labels:
-                    if _similar(existing["label"], cleaned) > 0.5:
-                        is_similar = True
-                        break
-                if is_similar:
-                    continue
-                labels.append(
-                    {
-                        "label": cleaned,
-                        "score": round(score, 4),
-                        "confidence_percentage": round(score * 100, 2),
-                    }
-                )
-                if len(labels) >= max_labels:
-                    break
-
-            return {
-                "success": True,
-                "labels": labels,
-                "label_count": len(labels),
-                "model_used": self.model_name,
-                "validation_model": self.validation_model_name,
-                "candidate_count": len(candidates),
-                "confidence_threshold": confidence_threshold,
-                "device": self.device,
-                "model_source": self.model_source,
-                "validation_model_source": self.validation_model_source,
-            }
-        except Exception as exc:
-            logger.exception("Error recognizing image %s", image_path)
-            return {
-                "success": False,
-                "labels": [],
-                "label_count": 0,
-                "error": str(exc),
-            }
-
-    def _generate_candidates(self, image: Image.Image, max_labels: int) -> list[str]:
-        candidates: list[str] = []
-
-        detection_result = self._safe_run_florence_task(image, "<OD>")
-        if isinstance(detection_result, dict):
-            labels = detection_result.get("<OD>", {}).get("labels", [])
-            candidates.extend(labels)
-
-        dense_region_result = self._safe_run_florence_task(image, "<DENSE_REGION_CAPTION>")
-        candidates.extend(self._extract_region_keywords(dense_region_result, "<DENSE_REGION_CAPTION>"))
-
-        caption_result = self._safe_run_florence_task(image, "<MORE_DETAILED_CAPTION>")
-        if isinstance(caption_result, dict):
-            caption = caption_result.get("<MORE_DETAILED_CAPTION>", "")
-            candidates.extend(self._extract_caption_keywords(caption))
-
-        detailed_caption_result = self._safe_run_florence_task(image, "<DETAILED_CAPTION>")
-        if isinstance(detailed_caption_result, dict):
-            caption = detailed_caption_result.get("<DETAILED_CAPTION>", "")
-            candidates.extend(self._extract_caption_keywords(caption))
-
-        ocr_result = self._safe_run_florence_task(image, "<OCR>")
-        if isinstance(ocr_result, dict):
-            ocr_text = ocr_result.get("<OCR>", "")
-            candidates.extend(self._extract_ocr_keywords(ocr_text))
-
-        normalized: list[str] = []
-        for label in candidates:
-            cleaned = self._clean_label(label)
-            if cleaned and cleaned not in normalized:
-                normalized.append(cleaned)
-            if len(normalized) >= max_labels * 8:
-                break
-
-        if len(normalized) < max_labels * 2:
-            for fallback in FALLBACK_CANDIDATE_LABELS:
-                cleaned = self._clean_label(fallback)
-                if cleaned not in normalized:
-                    normalized.append(cleaned)
-                if len(normalized) >= max(max_labels * 6, 18):
-                    break
-
-        return normalized[: max(max_labels * 6, 18)]
-
-    def _run_florence_task(self, image: Image.Image, task_prompt: str) -> dict:
-        if not self.processor or not self.caption_model:
-            raise RuntimeError("Florence recognition models are not initialized")
-
-        inputs = self.processor(text=task_prompt, images=image, return_tensors="pt")
-        input_ids = inputs.get("input_ids")
-        attention_mask = inputs.get("attention_mask")
-        pixel_values = inputs.get("pixel_values")
-
-        if input_ids is None:
-            raise RuntimeError(f"Florence-2 did not produce input_ids for task {task_prompt}.")
-        if pixel_values is None:
-            raise RuntimeError(
-                f"Florence-2 did not produce pixel_values for task {task_prompt}. "
-                "Please confirm the input file is a readable RGB image."
-            )
-
-        model_inputs = {"input_ids": input_ids.to(self.device)}
-        pixel_values = pixel_values.to(self.device)
-        if self.device == "cuda":
-            pixel_values = pixel_values.to(self.dtype)
-        model_inputs["pixel_values"] = pixel_values
-        if attention_mask is not None:
-            model_inputs["attention_mask"] = attention_mask.to(self.device)
-
-        with torch.no_grad():
-            generated_ids = self.caption_model.generate(
-                **model_inputs,
-                max_new_tokens=128,
-                num_beams=3,
-                do_sample=False,
-            )
-        generated_text = self.processor.batch_decode(
-            generated_ids,
-            skip_special_tokens=False,
-        )[0]
-        parsed = self.processor.post_process_generation(
-            generated_text,
-            task=task_prompt,
-            image_size=(image.width, image.height),
-        )
-        if parsed is None:
-            raise RuntimeError(f"Florence-2 returned an empty parsed result for task {task_prompt}.")
-        return parsed
-
-
-    def _run_generic_caption(self, image: Image.Image, task_prompt: str) -> dict:
-        """Run a generic image->text captioning pipeline and normalize output.
-
-        Returns a dict keyed by a Florence-like task token so downstream extraction
-        logic can remain largely unchanged.
+        Returns:
+            Dictionary containing recognition results
         """
-        if not self.caption_pipe:
-            raise RuntimeError("Generic caption pipeline is not initialized")
-
-        result = self.caption_pipe(image)
-        text = ""
-        if isinstance(result, list) and result:
-            first = result[0]
-            if isinstance(first, dict):
-                text = first.get("generated_text") or first.get("caption") or first.get("text") or ""
-            elif isinstance(first, str):
-                text = first
-        elif isinstance(result, dict):
-            text = result.get("generated_text") or result.get("caption") or result.get("text") or ""
-        elif isinstance(result, str):
-            text = result
-
-        return {"<DETAILED_CAPTION>": text}
-
-    def _safe_run_florence_task(self, image: Image.Image, task_prompt: str) -> dict:
         try:
-            # Use Florence multi-task path when available
-            if self.caption_model is not None and self.processor is not None:
-                return self._run_florence_task(image, task_prompt)
-            # Fallback: generic image-to-text captioning pipeline
-            if self.caption_pipe is not None:
-                return self._run_generic_caption(image, task_prompt)
-            return {}
+            with Image.open(image_path).convert("RGB") as image:
+                # Generate initial captions/descriptions
+                raw_caption = self._generate_caption(image)
+                logger.debug("Raw caption for %s: %s", image_path, raw_caption)
+
+                # Extract candidate labels from caption
+                candidates = self._extract_candidate_labels(raw_caption)
+                logger.debug("Candidate labels for %s: %s", image_path, candidates)
+
+                if not candidates:
+                    return {"labels": [], "raw_caption": raw_caption}
+
+                # Validate candidates with zero-shot classifier
+                validated = self._validate_candidates(image, candidates)
+
+                # Filter and format results
+                results = []
+                for item in validated:
+                    score = item.get("score", 0.0)
+                    if score >= confidence_threshold:
+                        results.append({
+                            "label": item.get("label", ""),
+                            "score": score,
+                            "confidence_percentage": round(score * 100, 2),
+                        })
+
+                results = results[:max_labels]
+                logger.debug("Final labels for %s: %s", image_path, results)
+                return {"labels": results, "raw_caption": raw_caption}
+
         except Exception as exc:
-            logger.warning("Recognition task %s failed: %s", task_prompt, exc)
-            return {}
+            logger.exception("Error recognizing image %s: %s", image_path, exc)
+            return {"labels": [], "raw_caption": str(exc), "error": True}
 
-    def _extract_caption_keywords(self, caption: str) -> list[str]:
-        words = re.findall(r"[a-zA-Z][a-zA-Z\-]{2,}", caption.lower())
-        keywords: list[str] = []
-        for word in words:
-            if word in STOPWORDS:
-                continue
-            cleaned = self._clean_label(word)
-            if cleaned and cleaned not in keywords:
-                keywords.append(cleaned)
-            if len(keywords) >= 8:
-                break
-        return keywords
+    def _generate_caption(self, image: Image.Image) -> str:
+        """Generate a raw caption/description for the image."""
+        # First check if we're using pipeline fallback
+        if self.caption_pipe is not None:
+            try:
+                output = self.caption_pipe(image)
+                if output and isinstance(output, list) and len(output) > 0:
+                    return output[0].get("generated_text", "")
+                return ""
+            except Exception as exc:
+                logger.exception("Pipeline captioning failed: %s", exc)
+                return ""
+        
+        if self.is_florence:
+            return self._run_florence_task(image, task_prompt="<MORE_DETAILED_CAPTION>")
+        elif self.is_blip2:
+            return self._run_blip2_caption(image)
+        else:
+            return self._run_generic_caption(image)
 
-    def _extract_region_keywords(self, result: dict, key: str) -> list[str]:
-        if not isinstance(result, dict):
+    def _run_florence_task(self, image: Image.Image, task_prompt: str) -> str:
+        """Run a Florence-2 task (e.g. captioning)."""
+        if not self.processor or not self.caption_model:
+            return ""
+
+        try:
+            inputs = self.processor(text=task_prompt, images=image, return_tensors="pt").to(self.device)
+
+            with torch.no_grad():
+                generated_ids = self.caption_model.generate(
+                    input_ids=inputs["input_ids"],
+                    pixel_values=inputs["pixel_values"],
+                    max_new_tokens=512,
+                    num_beams=3,
+                    early_stopping=True,
+                    do_sample=False,
+                    repetition_penalty=1.2,
+                )
+
+            generated_text = self.processor.batch_decode(
+                generated_ids,
+                skip_special_tokens=True,
+            )[0]
+
+            # Florence prefixes the answer with the task prompt; strip it.
+            cleaned_text = generated_text.replace(task_prompt, "").strip()
+            return cleaned_text
+        except Exception as exc:
+            logger.exception("Florence task failed for prompt %s: %s", task_prompt, exc)
+            return ""
+
+    def _run_blip2_caption(self, image: Image.Image) -> str:
+        """Run BLIP-2 image captioning."""
+        if not self.processor or not self.caption_model:
+            return ""
+
+        try:
+            inputs = self.processor(image, return_tensors="pt").to(self.device, self.dtype)
+
+            with torch.no_grad():
+                generated_ids = self.caption_model.generate(**inputs, max_length=200)
+
+            generated_text = self.processor.batch_decode(
+                generated_ids,
+                skip_special_tokens=True,
+            )[0]
+
+            return generated_text
+        except Exception as exc:
+            logger.exception("BLIP-2 captioning failed: %s", exc)
+            return ""
+
+    def _run_generic_caption(self, image: Image.Image) -> str:
+        """Run generic image captioning (ViT-GPT2, etc.)."""
+        if not self.processor or not self.caption_model:
+            return ""
+
+        try:
+            inputs = self.processor(image, return_tensors="pt").to(self.device)
+
+            with torch.no_grad():
+                generated_ids = self.caption_model.generate(**inputs, max_length=100)
+
+            generated_text = self.processor.batch_decode(
+                generated_ids,
+                skip_special_tokens=True,
+            )[0]
+
+            return generated_text
+        except Exception as exc:
+            logger.exception("Generic captioning failed: %s", exc)
+            return ""
+
+    def _extract_candidate_labels(self, raw_caption: str) -> list[str]:
+        """Extract candidate labels from raw caption using intelligent filtering."""
+        if not raw_caption:
             return []
-        region_payload = result.get(key, {})
-        if not isinstance(region_payload, dict):
-            return []
-        labels = list(region_payload.get("labels", []))
-        region_captions = list(region_payload.get("bboxes_labels", []))
-        candidates: list[str] = []
-        candidates.extend(labels)
-        for caption in region_captions:
-            candidates.extend(self._extract_caption_keywords(caption))
-        return candidates
 
-    def _extract_ocr_keywords(self, ocr_text: str) -> list[str]:
-        words = re.findall(r"[a-zA-Z0-9][a-zA-Z0-9\-]{2,}", ocr_text.lower())
-        keywords: list[str] = []
-        for word in words:
-            cleaned = self._clean_label(word)
-            if cleaned and cleaned not in keywords:
-                keywords.append(cleaned)
-            if len(keywords) >= 6:
-                break
-        return keywords
+        # Common stop words to filter out
+        stop_words = {
+            "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+            "have", "has", "had", "do", "does", "did", "will", "would", "could",
+            "should", "may", "might", "must", "shall", "can", "need", "dare",
+            "to", "of", "in", "for", "on", "with", "at", "by", "from", "as",
+            "into", "through", "during", "before", "after", "above", "below",
+            "between", "under", "again", "further", "then", "once", "here",
+            "there", "when", "where", "why", "how", "all", "each", "few",
+            "more", "most", "other", "some", "such", "no", "nor", "not",
+            "only", "own", "same", "so", "than", "too", "very", "just",
+            "and", "but", "if", "or", "because", "until", "while", "although",
+            "this", "that", "these", "those", "it", "its", "they", "them",
+            "their", "what", "which", "who", "whom", "we", "our", "you", "your",
+            "he", "she", "him", "her", "his", "hers", "himself", "herself",
+            "my", "me", "i", "us", " myself", "ours", "themselves",
+            "photo", "image", "picture", "photograph", "scene", "view",
+            "showing", "shown", "depicting", "depicts", "displaying", "displays",
+            "appears", "appear", "including", "contains", "contain", "featuring",
+        }
 
+        # Common adjectives that are not useful as labels
+        noise_words = {
+            "beautiful", "lovely", "pretty", "nice", "good", "great", "wonderful",
+            "amazing", "awesome", "fantastic", "excellent", "perfect", "wonderful",
+            "bright", "colorful", "vibrant", "dark", "light", "small", "large",
+            "big", "little", "tiny", "huge", "giant", "massive", "tall", "short",
+            "long", "round", "square", "old", "new", "young", "ancient", "modern",
+            "traditional", "classic", "famous", "popular", "familiar", "famous",
+            "real", "really", "very", "extremely", "incredibly", "actually",
+            "simply", "basically", "literally", "totally", "completely", "entirely",
+        }
 
+        # Clean and split into words
+        cleaned = re.sub(r"[^\w\s]", " ", raw_caption.lower())
+        words = [w.strip() for w in cleaned.split() if w.strip() and len(w) > 2]
 
-    @staticmethod
-    def _clean_label(label: str) -> str:
-        if "," in label:
-            label = label.split(",")[0]
-        return re.sub(r"[^a-z0-9]+", "_", label.strip().lower()).strip("_")[:50]
+        # Filter out stop words and noise
+        candidates = [
+            w for w in words
+            if w not in stop_words
+            and w not in noise_words
+            and not w.isdigit()
+            and not any(c.isdigit() for c in w)
+        ]
 
-    @staticmethod
-    def _resolve_device(device_preference: str) -> str:
+        # Extract meaningful 2-word phrases (only common object combinations)
+        common_object_pairs = {
+            "red flower", "blue sky", "green grass", "white cloud", "tall tree",
+            "stone wall", "brick wall", "wooden fence", "blue water", "clear sky",
+            "green leaf", "brown dog", "black cat", "white shirt", "blue jeans",
+            "wearing glasses", "holding phone", "sitting chair", "standing next",
+            "street light", "traffic light", "fire hydrant", "parking meter",
+            "coffee table", "living room", "bedroom floor", "kitchen counter",
+            "front door", "back yard", "front yard", "stone path", "dirt road",
+        }
+
+        phrases = []
+        for i in range(len(words) - 1):
+            two_word = f"{words[i]} {words[i+1]}"
+            if two_word in common_object_pairs:
+                phrases.append(two_word)
+
+        # Combine and deduplicate
+        all_candidates = candidates + phrases
+
+        # Remove duplicates and filter again
+        all_candidates = list(set(all_candidates))
+        all_candidates = [c for c in all_candidates if len(c) > 2 and c not in stop_words]
+
+        # Sort by length (longer phrases first) and limit
+        all_candidates.sort(key=len, reverse=True)
+        return all_candidates[:15]
+
+    def _validate_candidates(self, image: Image.Image, candidates: list[str]) -> list[dict]:
+        """Validate candidate labels with zero-shot classifier."""
+        if not self.validation_pipe:
+            return [{"label": c, "score": 0.75} for c in candidates]
+
+        try:
+            results = self.validation_pipe(image, candidate_labels=candidates)
+            return sorted(results, key=lambda x: x.get("score", 0.0), reverse=True)
+        except Exception:
+            logger.warning("Validation failed, returning candidates without validation")
+            return [{"label": c, "score": 0.75} for c in candidates]
+
+    def _resolve_device(self, device_preference: str) -> str:
+        """Resolve which device to use (cuda or cpu)."""
         preference = (device_preference or "auto").lower()
         has_cuda = torch.cuda.is_available()
         if preference == "cuda":
@@ -399,24 +450,20 @@ class ImageRecognitionService:
             return "cpu"
         return "cuda" if has_cuda else "cpu"
 
-    @staticmethod
-    def _resolve_model_source(model_name: str) -> str:
-        cache_root = Path.home() / ".cache" / "huggingface" / "hub"
-        model_dir = cache_root / f"models--{model_name.replace('/', '--')}"
-        refs_main = model_dir / "refs" / "main"
-        if refs_main.exists():
-            revision = refs_main.read_text(encoding="utf-8").strip()
-            snapshot_dir = model_dir / "snapshots" / revision
-            if snapshot_dir.exists():
-                return str(snapshot_dir)
+    def _resolve_model_source(self, model_name: str) -> str:
+        """Resolve model source - check for local path or use HuggingFace hub."""
+        model_path = Path(model_name)
+        if model_path.exists() and model_path.is_dir():
+            return model_name
         return model_name
 
-    @staticmethod
-    def _is_local_model_source(model_source: str) -> bool:
-        return os.path.exists(model_source)
+    def _is_local_model_source(self, model_source: str) -> bool:
+        """Check if model source is a local path."""
+        return Path(model_source).exists() and Path(model_source).is_dir()
 
 
-_recognition_services: dict[tuple[str, str, str, bool], ImageRecognitionService] = {}
+# Cache for loaded recognition services
+_recognition_service_cache: dict[str, ImageRecognitionService] = {}
 
 
 def get_recognition_service(
@@ -424,43 +471,29 @@ def get_recognition_service(
     validation_model_name: str,
     device_preference: str = "auto",
     use_fast: bool = True,
+    force_reload: bool = False,
 ) -> ImageRecognitionService:
-    """Get or create an image recognition service instance for the requested model configuration."""
-    if os.getenv("FAKE_RECOGNITION", "false").lower() == "true":
-        class FakeRecognitionService:
-            def __init__(self):
-                self.device = "cpu"
+    """Get or create a recognition service instance.
 
-            def recognize_image(self, image_path: str, confidence_threshold: float = 0.6, max_labels: int = 3) -> dict:
-                # deterministic fake labels useful for demos
-                fake_labels = [
-                    {"label": "person", "score": 0.95, "confidence_percentage": 95.0},
-                    {"label": "sunset", "score": 0.87, "confidence_percentage": 87.0},
-                    {"label": "mountain", "score": 0.78, "confidence_percentage": 78.0},
-                ]
-                return {
-                    "success": True,
-                    "labels": fake_labels[:max_labels],
-                    "label_count": min(len(fake_labels), max_labels),
-                    "model_used": model_name,
-                    "validation_model": validation_model_name,
-                    "candidate_count": len(fake_labels),
-                    "confidence_threshold": confidence_threshold,
-                    "device": "cpu",
-                    "model_source": model_name,
-                    "validation_model_source": validation_model_name,
-                }
+    Args:
+        model_name: Name of the captioning model to use
+        validation_model_name: Name of the zero-shot validation model
+        device_preference: Preferred device ('cuda', 'cpu', 'auto')
+        use_fast: Whether to use fast tokenizers
+        force_reload: Force reload even if cached
 
-        return FakeRecognitionService()
+    Returns:
+        ImageRecognitionService instance
+    """
+    cache_key = f"{model_name}::{validation_model_name}::{device_preference}::{use_fast}"
+    if not force_reload and cache_key in _recognition_service_cache:
+        return _recognition_service_cache[cache_key]
 
-    cache_key = (model_name, validation_model_name, device_preference, use_fast)
-    if cache_key not in _recognition_services:
-        auth_token = os.getenv("HUGGINGFACE_TOKEN")
-        _recognition_services[cache_key] = ImageRecognitionService(
-            model_name,
-            validation_model_name,
-            device_preference=device_preference,
-            use_fast=use_fast,
-            use_auth_token=auth_token,
-        )
-    return _recognition_services[cache_key]
+    service = ImageRecognitionService(
+        model_name=model_name,
+        validation_model_name=validation_model_name,
+        device_preference=device_preference,
+        use_fast=use_fast,
+    )
+    _recognition_service_cache[cache_key] = service
+    return service

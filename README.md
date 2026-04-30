@@ -11,7 +11,7 @@ This project is a local web-based photo renaming tool with multi-model support:
 
 ## Features
 
-- **Multi-Model Support**: Choose from 6 different AI models for element recognition
+- **Multi-Model Support**: Choose from 3 different AI models for element recognition
 - **Model Descriptions**: Each model includes performance characteristics and resource requirements
 - **Flexible Configuration**: Adjust confidence thresholds, label counts, and output options
 - **Batch Processing**: Process entire directories with progress tracking
@@ -22,11 +22,8 @@ This project is a local web-based photo renaming tool with multi-model support:
 ## Supported Models
 
 1. **Florence-2 base-ft** (Default, Accurate) - High accuracy, multi-task capable
-2. **Florence-2 small** (Faster, Resource-friendly) - Speed-optimized with moderate accuracy
-3. **BLIP Image Captioning Large** (Fast, General) - Quick candidate generation
-4. **BLIP-2 Flan-T5 Large** (Powerful, Resource-intensive) - High-quality generation
-5. **ViT-GPT2 Image Captioning** (Lightweight, Stable) - Low resource requirements
-6. **CLIP ViT Large** (Similarity/Candidate Validation) - For similarity checking
+2. **BLIP Image Captioning Large** (Fast, General) - Quick candidate generation
+3. **ViT-GPT2 Image Captioning** (Lightweight, Stable) - Low resource requirements
 
 ## Start
 

@@ -52,11 +52,23 @@
                   </div>
                   <input id="max_labels" name="max_labels" type="number" min="1" max="10" step="1" value="3" />
                 </div>
-                <label class="field">
-                  <span>元素提取模型</span>
+                <div class="field element-model-field">
+                  <div class="element-model-head">
+                    <span>元素提取模型</span>
+                    <div class="device-selector">
+                      <label class="device-option">
+                        <input id="device_cpu" name="device" type="radio" value="cpu" />
+                        <span>CPU</span>
+                      </label>
+                      <label class="device-option">
+                        <input id="device_gpu" name="device" type="radio" value="cuda" checked />
+                        <span>GPU</span>
+                      </label>
+                    </div>
+                  </div>
                   <select id="element_model" name="element_model"></select>
                   <div id="element_model_info" class="field-desc"></div>
-                </label>
+                </div>
               </div>
 
               <div class="form-section">
@@ -102,7 +114,10 @@
               <span>递归扫描子目录</span>
             </label>
 
-            <button id="submit-btn" class="primary-btn" type="submit">开始批量处理</button>
+            <div class="button-group">
+              <button id="submit-btn" class="primary-btn" type="submit">开始批量处理</button>
+              <button id="cancel-btn" class="danger-btn hidden" type="button">取消任务</button>
+            </div>
           </form>
 
           <aside class="panel meta-panel">

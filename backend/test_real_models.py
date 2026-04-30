@@ -16,7 +16,7 @@ def test_real_models():
         test_image_path = f.name
 
     models_to_test = [
-        'florence-community/Florence-2-small',
+        'florence-community/Florence-2-base-ft',
         'Salesforce/blip-image-captioning-large',
         'nlpconnect/vit-gpt2-image-captioning'
     ]

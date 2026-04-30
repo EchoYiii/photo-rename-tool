@@ -32,6 +32,18 @@ router = APIRouter(prefix="/api/v1", tags=["processing"])
 JOB_STORE: dict[str, dict] = {}
 
 
+def _format_duration(total_seconds: float) -> str:
+    """格式化时长为易读格式。"""
+    if total_seconds < 60:
+        return f"{total_seconds:.1f} 秒"
+    elif total_seconds < 3600:
+        minutes = total_seconds / 60
+        return f"{minutes:.1f} 分钟"
+    else:
+        hours = total_seconds / 3600
+        return f"{hours:.1f} 小时"
+
+
 def translate_label(label: str, language: str) -> str:
     """Translate a label to the specified language.
     
@@ -67,6 +79,7 @@ class DirectoryProcessRequest(BaseModel):
     include_elements: bool = Field(default=True, description="Include AI-recognized elements in filename.")
     element_model: str = Field(default=settings.MODEL_NAME, description="Element recognition model to use.")
     label_language: str = Field(default="en", description="Language for labels: 'en' for English, 'zh' for Chinese.")
+    device: str = Field(default="auto", description="Device to use for inference: 'cpu', 'cuda', or 'auto'.")
 
 
 def _create_job_record(job_id: str, payload: DirectoryProcessRequest, source_dir: str, output_dir: str, total: int) -> dict:
@@ -89,7 +102,10 @@ def _create_job_record(job_id: str, payload: DirectoryProcessRequest, source_dir
         "errors": [],
         "started_at": datetime.utcnow().isoformat() + "Z",
         "completed_at": None,
+        "total_duration_seconds": None,
+        "total_duration_formatted": None,
         "paused": False,
+        "cancelled": False,
     }
 
 
@@ -118,7 +134,7 @@ def _process_directory_sync(job_id: str, payload: DirectoryProcessRequest, image
     recognition_service = get_recognition_service(
         payload.element_model,
         settings.VALIDATION_MODEL_NAME,
-        settings.DEVICE_PREFERENCE,
+        payload.device,
         use_fast=True,
     )
     job["device"] = recognition_service.device
@@ -132,6 +148,12 @@ def _process_directory_sync(job_id: str, payload: DirectoryProcessRequest, image
         if job.get("paused", False):
             job["status"] = "paused"
             job["message"] = "Task paused by user."
+            return
+
+        # Check if job is cancelled
+        if job.get("cancelled", False):
+            job["status"] = "cancelled"
+            job["message"] = "Task cancelled by user."
             return
 
         original_name = os.path.basename(image_path)
@@ -238,6 +260,21 @@ def _process_directory_sync(job_id: str, payload: DirectoryProcessRequest, image
     job["message"] = "Processing completed."
     job["progress_percentage"] = 100
 
+    # 计算总处理时长
+    try:
+        from dateutil import parser
+        started = parser.isoparse(job["started_at"])
+        completed = parser.isoparse(job["completed_at"])
+        total_seconds = (completed - started).total_seconds()
+        job["total_duration_seconds"] = round(total_seconds, 2)
+        job["total_duration_formatted"] = _format_duration(total_seconds)
+        logger.info(f"Job {job_id} completed in {job['total_duration_formatted']}")
+    except Exception as e:
+        logger.warning(f"Could not calculate processing duration: {e}")
+        # 使用一个估算值作为后备
+        job["total_duration_seconds"] = 0.0
+        job["total_duration_formatted"] = "< 1 秒"
+
 
 async def _run_directory_job(job_id: str, payload: DirectoryProcessRequest, image_paths: list[str], output_dir: str) -> None:
     try:
@@ -316,6 +353,23 @@ async def pause_directory_job(job_id: str) -> dict:
     return {"job_id": job_id, "status": "paused", "message": "Task paused successfully."}
 
 
+@router.post("/process-directory/{job_id}/cancel")
+async def cancel_directory_job(job_id: str) -> dict:
+    """Cancel a running directory processing job."""
+    job = JOB_STORE.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    if job["status"] in ["completed", "failed", "cancelled"]:
+        raise HTTPException(status_code=400, detail=f"Job is already {job['status']}.")
+
+    job["cancelled"] = True
+    job["status"] = "cancelled"
+    job["message"] = "Task cancelled by user."
+
+    return {"job_id": job_id, "status": "cancelled", "message": "Task cancelled successfully."}
+
+
 @router.post("/process-directory/{job_id}/resume")
 async def resume_directory_job(job_id: str) -> dict:
     """Resume a paused directory processing job."""
@@ -357,6 +411,19 @@ async def resume_directory_job(job_id: str) -> dict:
             job["status"] = "completed"
             job["message"] = "Processing completed."
             job["completed_at"] = datetime.utcnow().isoformat() + "Z"
+            
+            # 计算总处理时长（即使是从暂停恢复的）
+            try:
+                from dateutil import parser
+                started = parser.isoparse(job["started_at"])
+                completed = parser.isoparse(job["completed_at"])
+                total_seconds = (completed - started).total_seconds()
+                job["total_duration_seconds"] = round(total_seconds, 2)
+                job["total_duration_formatted"] = _format_duration(total_seconds)
+            except Exception as e:
+                logger.warning("Could not calculate processing duration: %s", e)
+                job["total_duration_seconds"] = None
+                job["total_duration_formatted"] = None
 
     except Exception as exc:
         logger.exception("Failed to resume job %s", job_id)
