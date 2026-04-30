@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 from datetime import datetime
 from uuid import uuid4
 
@@ -25,8 +24,6 @@ from ..utils.file_handler import (
     iter_image_files,
     get_camera_make,
     classify_photo_type,
-    LABEL_TRANSLATIONS,
-    PHOTO_TYPE_TRANSLATIONS,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,6 +65,7 @@ class DirectoryProcessRequest(BaseModel):
     include_camera: bool = Field(default=True, description="Include camera manufacturer in filename.")
     include_type: bool = Field(default=True, description="Include photo type in filename.")
     include_elements: bool = Field(default=True, description="Include AI-recognized elements in filename.")
+    element_model: str = Field(default=settings.MODEL_NAME, description="Element recognition model to use.")
     label_language: str = Field(default="en", description="Language for labels: 'en' for English, 'zh' for Chinese.")
 
 
@@ -78,7 +76,7 @@ def _create_job_record(job_id: str, payload: DirectoryProcessRequest, source_dir
         "message": "Task queued.",
         "source_path": source_dir,
         "output_path": output_dir,
-        "model": settings.MODEL_NAME,
+        "model": payload.element_model,
         "validation_model": settings.VALIDATION_MODEL_NAME,
         "confidence_threshold": payload.confidence_threshold,
         "max_labels": payload.max_labels,
@@ -91,6 +89,7 @@ def _create_job_record(job_id: str, payload: DirectoryProcessRequest, source_dir
         "errors": [],
         "started_at": datetime.utcnow().isoformat() + "Z",
         "completed_at": None,
+        "paused": False,
     }
 
 
@@ -106,8 +105,18 @@ def _process_directory_sync(job_id: str, payload: DirectoryProcessRequest, image
     job["status"] = "running"
     job["message"] = "Loading recognition models."
 
+    if payload.element_model not in settings.SUPPORTED_ELEMENT_RECOGNITION_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Unsupported element_model. "
+                "Valid values are: "
+                f"{', '.join(settings.SUPPORTED_ELEMENT_RECOGNITION_MODELS)}"
+            ),
+        )
+
     recognition_service = get_recognition_service(
-        settings.MODEL_NAME,
+        payload.element_model,
         settings.VALIDATION_MODEL_NAME,
         settings.DEVICE_PREFERENCE,
         use_fast=True,
@@ -119,6 +128,12 @@ def _process_directory_sync(job_id: str, payload: DirectoryProcessRequest, image
     errors: list[dict] = []
 
     for index, image_path in enumerate(image_paths):
+        # Check if job is paused
+        if job.get("paused", False):
+            job["status"] = "paused"
+            job["message"] = "Task paused by user."
+            return
+
         original_name = os.path.basename(image_path)
         _update_job_progress(job, index, total, f"Processing {index + 1}/{total}: {original_name}")
         try:
@@ -249,6 +264,16 @@ async def process_directory(payload: DirectoryProcessRequest) -> dict:
     except OSError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid path configuration: {exc}") from exc
 
+    if payload.element_model not in settings.SUPPORTED_ELEMENT_RECOGNITION_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Unsupported element_model. "
+                "Valid values are: "
+                f"{', '.join(settings.SUPPORTED_ELEMENT_RECOGNITION_MODELS)}"
+            ),
+        )
+
     if not image_paths:
         raise HTTPException(status_code=400, detail="No supported image files were found in the source directory.")
 
@@ -272,6 +297,73 @@ async def get_directory_job(job_id: str) -> dict:
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
     return job
+
+
+@router.post("/process-directory/{job_id}/pause")
+async def pause_directory_job(job_id: str) -> dict:
+    """Pause a running directory processing job."""
+    job = JOB_STORE.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    if job["status"] not in ["running", "queued"]:
+        raise HTTPException(status_code=400, detail="Job is not in a pausable state.")
+
+    job["paused"] = True
+    job["status"] = "paused"
+    job["message"] = "Task paused by user."
+
+    return {"job_id": job_id, "status": "paused", "message": "Task paused successfully."}
+
+
+@router.post("/process-directory/{job_id}/resume")
+async def resume_directory_job(job_id: str) -> dict:
+    """Resume a paused directory processing job."""
+    job = JOB_STORE.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    if job["status"] != "paused":
+        raise HTTPException(status_code=400, detail="Job is not paused.")
+
+    job["paused"] = False
+    job["status"] = "running"
+    job["message"] = "Task resumed."
+
+    # Create a new task to continue processing from where it left off
+    # We need to reconstruct the image paths and continue from the current index
+    try:
+        from ..utils.file_handler import iter_image_files
+        image_paths = list(iter_image_files(job["source_path"], recursive=True))
+        remaining_paths = image_paths[job["processed"]:]
+
+        if remaining_paths:
+            # Create a mock payload for resuming
+            resume_payload = DirectoryProcessRequest(
+                source_path=job["source_path"],
+                output_path=job["output_path"],
+                recursive=True,
+                confidence_threshold=job["confidence_threshold"],
+                max_labels=job["max_labels"],
+                include_camera=True,
+                include_type=True,
+                include_elements=True,
+                element_model=job["model"],
+                label_language="en",
+            )
+            asyncio.create_task(_run_directory_job(job_id, resume_payload, remaining_paths, job["output_path"]))
+        else:
+            # No more files to process
+            job["status"] = "completed"
+            job["message"] = "Processing completed."
+            job["completed_at"] = datetime.utcnow().isoformat() + "Z"
+
+    except Exception as exc:
+        logger.exception("Failed to resume job %s", job_id)
+        job["status"] = "failed"
+        job["message"] = f"Failed to resume: {str(exc)}"
+
+    return {"job_id": job_id, "status": job["status"], "message": job["message"]}
 
 
 @router.get("/health")
@@ -309,6 +401,15 @@ async def get_info() -> dict:
     return {
         "model": settings.MODEL_NAME,
         "validation_model": settings.VALIDATION_MODEL_NAME,
+        "element_model": settings.MODEL_NAME,
+        "element_models": [
+            {
+                "name": name,
+                "label": (value["label"] if isinstance(value, dict) else value),
+                "desc": (value.get("desc") if isinstance(value, dict) else None),
+            }
+            for name, value in settings.SUPPORTED_ELEMENT_RECOGNITION_MODELS.items()
+        ],
         "model_source": model_source,
         "validation_model_source": validation_source,
         "confidence_threshold": settings.CONFIDENCE_THRESHOLD,

@@ -21,7 +21,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 import torch
 from PIL import Image
@@ -62,6 +62,7 @@ class ImageRecognitionService:
         validation_model_name: str,
         device_preference: str = "auto",
         use_fast: bool = True,
+        use_auth_token: Optional[str] = None,
     ) -> None:
         self.model_name = model_name
         self.validation_model_name = validation_model_name
@@ -71,7 +72,11 @@ class ImageRecognitionService:
         self.validation_model_source = self._resolve_model_source(self.validation_model_name)
         self.processor: Optional[AutoProcessor] = None
         self.caption_model: Optional[Florence2ForConditionalGeneration] = None
+        self.caption_pipe: Optional[Any] = None
         self.validation_pipe = None
+        self.auth_token = use_auth_token
+        # Detect backend type: Florence vs general captioning pipelines
+        self.is_florence = "florence" in (self.model_name or "").lower()
         self.device_preference = device_preference
         self.use_fast = use_fast
         self._load_models()
@@ -84,24 +89,56 @@ class ImageRecognitionService:
             self.validation_model_source,
             self.use_fast,
         )
-        self.processor = AutoProcessor.from_pretrained(
-            self.model_source,
-            local_files_only=self._is_local_model_source(self.model_source),
-        )
-        self.caption_model = Florence2ForConditionalGeneration.from_pretrained(
-            self.model_source,
-            torch_dtype=self.dtype,
-            attn_implementation="eager",
-            local_files_only=self._is_local_model_source(self.model_source),
-        ).to(self.device)
-        self.caption_model.eval()
-        self.validation_pipe = pipeline(
-            "zero-shot-image-classification",
-            model=self.validation_model_source,
-            device=0 if self.device == "cuda" else -1,
-            local_files_only=self._is_local_model_source(self.validation_model_source),
-            use_fast=self.use_fast,
-        )
+
+        hf_kwargs = {}
+        if self.auth_token:
+            hf_kwargs["use_auth_token"] = self.auth_token
+
+        # Load validation pipeline (zero-shot classifier) - used by all backends
+        try:
+            self.validation_pipe = pipeline(
+                "zero-shot-image-classification",
+                model=self.validation_model_source,
+                device=0 if self.device == "cuda" else -1,
+                local_files_only=self._is_local_model_source(self.validation_model_source),
+                use_fast=self.use_fast,
+                **hf_kwargs,
+            )
+        except Exception:
+            logger.warning("Failed to load validation pipeline %s; continuing without it.", self.validation_model_source, exc_info=True)
+
+        # Florence-2 has a specialized processor + generation class with multi-task support.
+        if "florence" in (self.model_source or "").lower():
+            self.processor = AutoProcessor.from_pretrained(
+                self.model_source,
+                local_files_only=self._is_local_model_source(self.model_source),
+                **hf_kwargs,
+            )
+            self.caption_model = Florence2ForConditionalGeneration.from_pretrained(
+                self.model_source,
+                torch_dtype=self.dtype,
+                attn_implementation="eager",
+                local_files_only=self._is_local_model_source(self.model_source),
+                **hf_kwargs,
+            ).to(self.device)
+            self.caption_model.eval()
+        else:
+            # Generic captioning backend (BLIP, ViT-GPT2, etc.) — use the image-to-text pipeline.
+            try:
+                self.caption_pipe = pipeline(
+                    "image-to-text",
+                    model=self.model_source,
+                    device=0 if self.device == "cuda" else -1,
+                    local_files_only=self._is_local_model_source(self.model_source),
+                    use_fast=self.use_fast,
+                    **hf_kwargs,
+                )
+                # Generic pipelines don't require a separate processor/model on this side.
+                self.processor = None
+                self.caption_model = None
+            except Exception as exc:
+                logger.exception("Failed to load generic caption pipeline for %s: %s", self.model_source, exc)
+                raise
 
     def recognize_image(
         self,
@@ -221,7 +258,7 @@ class ImageRecognitionService:
 
     def _run_florence_task(self, image: Image.Image, task_prompt: str) -> dict:
         if not self.processor or not self.caption_model:
-            raise RuntimeError("Recognition models are not initialized")
+            raise RuntimeError("Florence recognition models are not initialized")
 
         inputs = self.processor(text=task_prompt, images=image, return_tensors="pt")
         input_ids = inputs.get("input_ids")
@@ -264,11 +301,42 @@ class ImageRecognitionService:
             raise RuntimeError(f"Florence-2 returned an empty parsed result for task {task_prompt}.")
         return parsed
 
+
+    def _run_generic_caption(self, image: Image.Image, task_prompt: str) -> dict:
+        """Run a generic image->text captioning pipeline and normalize output.
+
+        Returns a dict keyed by a Florence-like task token so downstream extraction
+        logic can remain largely unchanged.
+        """
+        if not self.caption_pipe:
+            raise RuntimeError("Generic caption pipeline is not initialized")
+
+        result = self.caption_pipe(image)
+        text = ""
+        if isinstance(result, list) and result:
+            first = result[0]
+            if isinstance(first, dict):
+                text = first.get("generated_text") or first.get("caption") or first.get("text") or ""
+            elif isinstance(first, str):
+                text = first
+        elif isinstance(result, dict):
+            text = result.get("generated_text") or result.get("caption") or result.get("text") or ""
+        elif isinstance(result, str):
+            text = result
+
+        return {"<DETAILED_CAPTION>": text}
+
     def _safe_run_florence_task(self, image: Image.Image, task_prompt: str) -> dict:
         try:
-            return self._run_florence_task(image, task_prompt)
+            # Use Florence multi-task path when available
+            if self.caption_model is not None and self.processor is not None:
+                return self._run_florence_task(image, task_prompt)
+            # Fallback: generic image-to-text captioning pipeline
+            if self.caption_pipe is not None:
+                return self._run_generic_caption(image, task_prompt)
+            return {}
         except Exception as exc:
-            logger.warning("Florence task %s failed: %s", task_prompt, exc)
+            logger.warning("Recognition task %s failed: %s", task_prompt, exc)
             return {}
 
     def _extract_caption_keywords(self, caption: str) -> list[str]:
@@ -348,7 +416,7 @@ class ImageRecognitionService:
         return os.path.exists(model_source)
 
 
-_recognition_service: Optional[ImageRecognitionService] = None
+_recognition_services: dict[tuple[str, str, str, bool], ImageRecognitionService] = {}
 
 
 def get_recognition_service(
@@ -357,9 +425,7 @@ def get_recognition_service(
     device_preference: str = "auto",
     use_fast: bool = True,
 ) -> ImageRecognitionService:
-    """Get or create a singleton image recognition service."""
-    global _recognition_service
-    # Support a fake recognition service for quick end-to-end demos without heavy model downloads.
+    """Get or create an image recognition service instance for the requested model configuration."""
     if os.getenv("FAKE_RECOGNITION", "false").lower() == "true":
         class FakeRecognitionService:
             def __init__(self):
@@ -387,11 +453,14 @@ def get_recognition_service(
 
         return FakeRecognitionService()
 
-    if _recognition_service is None:
-        _recognition_service = ImageRecognitionService(
+    cache_key = (model_name, validation_model_name, device_preference, use_fast)
+    if cache_key not in _recognition_services:
+        auth_token = os.getenv("HUGGINGFACE_TOKEN")
+        _recognition_services[cache_key] = ImageRecognitionService(
             model_name,
             validation_model_name,
             device_preference=device_preference,
             use_fast=use_fast,
+            use_auth_token=auth_token,
         )
-    return _recognition_service
+    return _recognition_services[cache_key]

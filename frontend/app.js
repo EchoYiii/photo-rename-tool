@@ -8,11 +8,20 @@ const submitButton = document.getElementById('submit-btn');
 const confidenceRange = document.getElementById('confidence_threshold');
 const confidenceInput = document.getElementById('confidence_threshold_input');
 const confidenceDisplay = document.getElementById('confidence_display');
+const elementModelSelect = document.getElementById('element_model');
+const elementModelInfo = document.getElementById('element_model_info');
+let serverElementModels = null;
+if (elementModelSelect) {
+  elementModelSelect.innerHTML = '<option value="" disabled selected>加载中…</option>';
+  elementModelSelect.disabled = true;
+}
 const progressPanel = document.getElementById('progress-panel');
 const progressBar = document.getElementById('progress-bar');
 const progressLabel = document.getElementById('progress-label');
 const progressMessage = document.getElementById('progress-message');
 const progressCount = document.getElementById('progress-count');
+const pauseBtn = document.getElementById('pause-btn');
+const resumeBtn = document.getElementById('resume-btn');
 
 const apiBase = "/api/v1";
 let activeJobId = null;
@@ -63,11 +72,64 @@ function stopPolling() {
   activeJobId = null;
 }
 
+function populateElementModelOptions(models, selectedModel) {
+  if (!elementModelSelect || !Array.isArray(models)) {
+    return;
+  }
+
+  serverElementModels = models;
+  elementModelSelect.innerHTML = '';
+
+  if (!models.length) {
+    const placeholder = new Option('未检测到可用模型', '', true, true);
+    placeholder.disabled = true;
+    elementModelSelect.appendChild(placeholder);
+    elementModelSelect.disabled = true;
+    if (elementModelInfo) {
+      elementModelInfo.innerHTML = '<p class="muted">当前无法加载元素提取模型。</p>';
+    }
+    return;
+  }
+
+  models.forEach((item) => {
+    const label = `${item.label}${item.desc ? ' — ' + item.desc : ''}`;
+    const option = new Option(label, item.name, false, false);
+    option.dataset.desc = item.desc || '';
+    elementModelSelect.appendChild(option);
+  });
+
+  const matchedModel = models.some((m) => m.name === selectedModel)
+    ? selectedModel
+    : models[0]?.name || '';
+  elementModelSelect.value = matchedModel;
+  elementModelSelect.disabled = false;
+
+  if (elementModelInfo) {
+    const selected = models.find((m) => m.name === elementModelSelect.value);
+    elementModelInfo.innerHTML = selected && selected.desc ? `<p class="muted">${selected.desc}</p>` : '';
+  }
+}
+
+if (elementModelSelect) {
+  elementModelSelect.addEventListener('change', (e) => {
+    const name = e.target.value;
+    if (!serverElementModels) return;
+    const sel = serverElementModels.find((m) => m.name === name);
+    if (elementModelInfo) {
+      elementModelInfo.innerHTML = sel && sel.desc ? `<p class="muted">${sel.desc}</p>` : '';
+    }
+  });
+}
+
 function renderMeta(info) {
+  if (info.element_models) {
+    populateElementModelOptions(info.element_models, info.element_model);
+  }
+
   metaList.innerHTML = `
     <div>
-      <p class="field-label">元素提取模型</p>
-      <p>${info.model}</p>
+      <p class="field-label">当前元素提取模型</p>
+      <p>${info.element_model || info.model}</p>
     </div>
     <div>
       <p class="field-label">候选校验模型</p>
@@ -202,7 +264,10 @@ async function fetchInfo() {
     renderMeta(data);
     hideBanner();
   } catch (error) {
-    showBanner('无法连接本地后端，请先启动 FastAPI 服务。');
+    const message = window.location.protocol === 'file:'
+      ? '当前页面通过文件协议打开，元素模型筛选器需要通过本地服务访问：例如 http://127.0.0.1:8000'
+      : '无法连接本地后端，请先启动 FastAPI 服务。';
+    showBanner(message);
   }
 }
 
@@ -267,7 +332,9 @@ form.addEventListener('submit', async (event) => {
     include_camera: document.getElementById('include_camera').checked,
     include_type: document.getElementById('include_type').checked,
     include_elements: document.getElementById('include_elements').checked,
-    label_language: document.querySelector('input[name="label_language"]:checked').value
+    element_model:
+      elementModelSelect?.value || elementModelSelect?.options?.[0]?.value || undefined,
+    label_language: document.querySelector('input[name="label_language"]:checked').value,
   };
 
   try {

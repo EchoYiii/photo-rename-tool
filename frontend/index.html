@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>照片重命名工具</title>
-    <link rel="stylesheet" href="/assets/styles.css" />
+    <link rel="stylesheet" id="main-styles" />
   </head>
   <body>
     <div class="page-shell">
@@ -52,6 +52,11 @@
                   </div>
                   <input id="max_labels" name="max_labels" type="number" min="1" max="10" step="1" value="3" />
                 </div>
+                <label class="field">
+                  <span>元素提取模型</span>
+                  <select id="element_model" name="element_model"></select>
+                  <div id="element_model_info" class="field-desc"></div>
+                </label>
               </div>
 
               <div class="form-section">
@@ -121,6 +126,10 @@
             <span id="progress-message">等待开始</span>
             <span id="progress-count">0 / 0</span>
           </div>
+          <div class="progress-controls">
+            <button id="pause-btn" class="secondary-btn" style="display: none;">暂停任务</button>
+            <button id="resume-btn" class="secondary-btn" style="display: none;">恢复任务</button>
+          </div>
         </section>
 
         <div id="banner" class="banner hidden"></div>
@@ -130,6 +139,15 @@
       </main>
     </div>
 
-    <script type="module" src="/assets/app.js"></script>
+    <script>
+      const localMode = window.location.protocol === 'file:';
+      const styleLink = document.getElementById('main-styles');
+      styleLink.href = localMode ? './styles.css' : '/assets/styles.css';
+
+      const script = document.createElement('script');
+      script.type = 'module';
+      script.src = localMode ? './app.js' : '/assets/app.js';
+      document.body.appendChild(script);
+    </script>
   </body>
 </html>
