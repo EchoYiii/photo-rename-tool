@@ -25,6 +25,8 @@ from typing import Optional, Any
 
 # Optimize CUDA memory usage - MUST SET BEFORE IMPORTING torch!
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+# Use HuggingFace mirror for faster downloads in China
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 import torch
 from PIL import Image
 from transformers import (

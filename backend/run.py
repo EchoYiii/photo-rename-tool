@@ -1,5 +1,8 @@
 """Development entrypoint."""
 
+import os
+# Use HuggingFace mirror for faster downloads in China
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 import uvicorn
 
 from app.core.config import settings
