@@ -33,6 +33,8 @@ from transformers import (
     AutoProcessor,
     AutoModelForCausalLM,
     Blip2ForConditionalGeneration,
+    BlipForConditionalGeneration,
+    BlipProcessor,
     Florence2ForConditionalGeneration,
     pipeline,
 )
@@ -81,9 +83,10 @@ class ImageRecognitionService:
         self.caption_pipe: Optional[Any] = None
         self.validation_pipe = None
         self.auth_token = use_auth_token
-        # Detect backend type: Florence vs BLIP-2 vs use pipeline fallback
+        # Detect backend type: Florence vs BLIP-2 vs BLIP vs use pipeline fallback
         self.is_florence = "florence" in (self.model_name or "").lower()
         self.is_blip2 = "blip2" in (self.model_name or "").lower()
+        self.is_blip = "blip" in (self.model_name or "").lower() and not self.is_blip2
         self.device_preference = device_preference
         self.use_fast = use_fast
         self._load_models()
@@ -169,6 +172,27 @@ class ImageRecognitionService:
                 logger.info("=== BLIP-2 model loaded successfully ===")
             except Exception as exc:
                 logger.exception("Failed to load BLIP-2 model for %s: %s", self.model_source, exc)
+                raise
+        elif self.is_blip:
+            # BLIP models require specialized loading with BlipForConditionalGeneration
+            try:
+                logger.info("=== Stage 1/2: Loading BLIP processor: %s ===", self.model_source)
+                self.processor = BlipProcessor.from_pretrained(
+                    self.model_source,
+                    **hf_kwargs,
+                )
+                logger.info("=== Stage 2/2: Processor loaded, now loading BLIP model (this may take several minutes on first run) ===")
+                self.caption_model = BlipForConditionalGeneration.from_pretrained(
+                    self.model_source,
+                    torch_dtype=self.dtype,
+                    low_cpu_mem_usage=True,
+                    **model_kwargs,
+                ).to(self.device)
+                self.caption_model.eval()
+                self.caption_pipe = None
+                logger.info("=== BLIP model loaded successfully ===")
+            except Exception as exc:
+                logger.exception("Failed to load BLIP model for %s: %s", self.model_source, exc)
                 raise
         else:
             # Fallback strategy: first try AutoModelForCausalLM, if fails use image-to-text pipeline
@@ -271,6 +295,8 @@ class ImageRecognitionService:
             return self._run_florence_task(image, task_prompt="<MORE_DETAILED_CAPTION>")
         elif self.is_blip2:
             return self._run_blip2_caption(image)
+        elif self.is_blip:
+            return self._run_blip_caption(image)
         else:
             return self._run_generic_caption(image)
 
@@ -324,6 +350,27 @@ class ImageRecognitionService:
             return generated_text
         except Exception as exc:
             logger.exception("BLIP-2 captioning failed: %s", exc)
+            return ""
+
+    def _run_blip_caption(self, image: Image.Image) -> str:
+        """Run BLIP image captioning."""
+        if not self.processor or not self.caption_model:
+            return ""
+
+        try:
+            inputs = self.processor(image, return_tensors="pt").to(self.device)
+
+            with torch.no_grad():
+                generated_ids = self.caption_model.generate(**inputs, max_length=200)
+
+            generated_text = self.processor.batch_decode(
+                generated_ids,
+                skip_special_tokens=True,
+            )[0]
+
+            return generated_text
+        except Exception as exc:
+            logger.exception("BLIP captioning failed: %s", exc)
             return ""
 
     def _run_generic_caption(self, image: Image.Image) -> str:
