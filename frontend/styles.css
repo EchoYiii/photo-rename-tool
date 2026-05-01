@@ -72,7 +72,6 @@
 
 .device-option input[type="radio"]:checked + span {
   color: var(--primary);
-  font-weight: 600;
 }
 
 .element-model-field select {
@@ -301,6 +300,10 @@ input {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
+}
+
+.confidence-head span {
+  font-weight: 700;
 }
 
 .confidence-head output {

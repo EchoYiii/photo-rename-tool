@@ -17,6 +17,7 @@ from ..services.image_recognition import get_recognition_service
 from ..services.translation import get_translation_service
 from ..utils.file_handler import (
     build_unique_output_path,
+    build_category_output_path,
     build_unique_path_for_name,
     copy_to_output,
     ensure_directory,
@@ -180,10 +181,13 @@ def _process_directory_sync(job_id: str, payload: DirectoryProcessRequest, image
                 else:
                     final_labels.append("unknown")
             
-            # 2. 照片类型（如果用户选择包含）
+            # 2. 照片类型（如果用户选择包含）- 使用CLIP分类器的14大类结果
             if payload.include_type:
-                photo_type = classify_photo_type([item["label"] for item in recognition.get("labels", [])], language=language)
-                if photo_type:
+                category_en = recognition.get("category_en")
+                category_zh = recognition.get("category_zh")
+                if category_en and category_zh:
+                    # 根据语言选择标签
+                    photo_type = category_zh if language == "zh" else category_en
                     # 将照片类型转换为文件名安全的格式
                     sanitized_type = "_".join(photo_type.lower().split())
                     final_labels.append(sanitized_type)
@@ -196,7 +200,17 @@ def _process_directory_sync(job_id: str, payload: DirectoryProcessRequest, image
             
             # 使用构建的标签列表
             labels = final_labels
+
+            # 获取照片类别用于文件夹分类（如果用户选择了包含类型）
+            category_folder_name = None
+            if payload.include_type:
+                category_en = recognition.get("category_en")
+                category_zh = recognition.get("category_zh")
+                if category_en and category_zh:
+                    category_folder_name = category_zh if language == "zh" else category_en
+
             if not labels:
+                # 没有有效标签时，不进入类别文件夹，直接保留原文件名
                 output_path = build_unique_path_for_name(output_dir, original_name)
                 copy_to_output(image_path, output_path)
                 results.append(
@@ -213,7 +227,11 @@ def _process_directory_sync(job_id: str, payload: DirectoryProcessRequest, image
                 )
             else:
                 extension = get_file_extension(original_name) or "jpg"
-                output_path = build_unique_output_path(output_dir, labels, extension)
+                # 如果有类别信息且用户选择了包含类型，则按类别分文件夹
+                if category_folder_name:
+                    output_path = build_category_output_path(output_dir, category_folder_name, labels, extension)
+                else:
+                    output_path = build_unique_output_path(output_dir, labels, extension)
                 copy_to_output(image_path, output_path)
                 # 翻译并构造返回给前端的标签列表（用于 UI 显示）
                 display_labels = []

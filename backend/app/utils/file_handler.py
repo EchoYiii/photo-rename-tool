@@ -411,6 +411,14 @@ def build_unique_output_path(output_dir: str, labels: list[str], extension: str)
     return build_unique_path_for_name(output_root, candidate.name)
 
 
+def build_category_output_path(output_dir: str, category: str, labels: list[str], extension: str) -> str:
+    """Build a unique output file path inside a category subfolder."""
+    category_folder = Path(output_dir) / category
+    category_folder.mkdir(parents=True, exist_ok=True)
+    filename = generate_output_filename(labels, extension)
+    return build_unique_path_for_name(category_folder, filename)
+
+
 def build_unique_path_for_name(output_dir: str | Path, filename: str) -> str:
     """Build a unique output path for an explicit filename."""
     output_root = Path(output_dir)

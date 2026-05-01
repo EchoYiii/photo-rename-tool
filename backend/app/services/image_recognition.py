@@ -446,14 +446,30 @@ class ImageRecognitionService:
                 if self._should_validate_species(candidates):
                     # Get targeted labels based on detected category
                     targeted_labels = self._get_targeted_species_labels(candidates, raw_caption)
+                    # IMPORTANT: When bird category is detected, extend candidates with ALL bird species
+                    # from BIRD_LABELS for comprehensive zero-shot validation
+                    if "bird" in candidates or "bird" in raw_caption.lower():
+                        bird_labels = [b for b in BIRD_LABELS if b not in candidates]
+                        if bird_labels:
+                            candidates = list(set(candidates + bird_labels))
+                            logger.debug("Extended candidates with %d bird species for validation", len(bird_labels))
                     # Use lower threshold for species to improve recall
                     species_threshold = 0.1
                     species_validated = self._validate_species_labels(image, targeted_labels)
                     if species_validated:
-                        for sv in species_validated:
-                            if sv.get("score", 0) >= species_threshold:
-                                candidates.append(sv["label"])
-                        candidates = list(set(candidates))
+                        # If bird category detected, only keep the top 1 bird species
+                        is_bird_detected = "bird" in candidates or "bird" in raw_caption.lower()
+                        if is_bird_detected:
+                            bird_species = [sv for sv in species_validated if sv.get("label", "").lower() in [b.lower() for b in BIRD_LABELS]]
+                            if bird_species:
+                                top_bird = bird_species[0]
+                                candidates = [top_bird["label"]]
+                                logger.debug("Bird species detected, only keeping top match: %s", top_bird["label"])
+                        else:
+                            for sv in species_validated:
+                                if sv.get("score", 0) >= species_threshold:
+                                    candidates.append(sv["label"])
+                            candidates = list(set(candidates))
                         logger.debug("After targeted species zero-shot validation: %s", candidates)
 
                 # Validate candidates with zero-shot classifier
@@ -810,7 +826,7 @@ class ImageRecognitionService:
         if not should_detect:
             return []
 
-        # Check each species label for matches in the caption
+        # Check each species label in SPECIES_LABELS for matches in the caption
         for species in SPECIES_LABELS:
             species_lower = species.lower()
             # Direct substring match
@@ -823,6 +839,21 @@ class ImageRecognitionService:
                 word_matches = sum(1 for w in words if w in caption_lower)
                 if word_matches >= 2 and word_matches == len(words):
                     detected_species.append(species)
+
+        # For bird detection, also check BIRD_LABELS for specific bird species in caption
+        # This catches birds that are not in the smaller SPECIES_LABELS
+        if "bird" in candidates or "bird" in caption_lower or has_animal_cat or has_animal_in_caption:
+            for bird in BIRD_LABELS:
+                bird_lower = bird.lower()
+                if bird_lower in caption_lower:
+                    detected_species.append(bird)
+                    continue
+                # For multi-word bird names like "house sparrow", check if all words match
+                if " " in bird:
+                    words = bird_lower.split()
+                    word_matches = sum(1 for w in words if w in caption_lower)
+                    if word_matches >= 2 and word_matches == len(words):
+                        detected_species.append(bird)
 
         # Remove duplicates while preserving order
         seen = set()

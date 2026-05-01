@@ -43,7 +43,7 @@ class Settings:
             "desc": "基于 YOLOv8 的目标检测模型，可识别 1000+ 物体类别，包括多种鸟类、动物。支持 GPU/CPU。",
         },
     }
-    DEVICE_PREFERENCE = os.getenv("DEVICE_PREFERENCE", "auto").lower()
+    DEVICE_PREFERENCE = os.getenv("DEVICE_PREFERENCE", "cpu").lower()
     CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.01"))
     MAX_LABELS = int(os.getenv("MAX_LABELS", "10"))
     DEBUG = os.getenv("DEBUG", "false").lower() == "true"
