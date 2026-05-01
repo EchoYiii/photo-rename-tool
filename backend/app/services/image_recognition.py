@@ -287,6 +287,17 @@ class ImageRecognitionService:
                     candidates = list(set(candidates + species_candidates))
                     logger.debug("After species detection: %s", candidates)
 
+                # If animal/plant category detected, also validate with species-specific labels
+                if self._should_validate_species(candidates):
+                    species_validated = self._validate_species_labels(image, SPECIES_LABELS)
+                    if species_validated:
+                        # Merge species validated results with candidates
+                        for sv in species_validated:
+                            if sv.get("score", 0) >= confidence_threshold:
+                                candidates.append(sv["label"])
+                        candidates = list(set(candidates))
+                        logger.debug("After species zero-shot validation: %s", candidates)
+
                 # Validate candidates with zero-shot classifier
                 validated = self._validate_candidates(image, candidates)
 
@@ -530,30 +541,35 @@ class ImageRecognitionService:
         caption_lower = raw_caption.lower()
 
         # Define category keywords to check
-        animal_categories = {"dog", "cat", "bird", "fish", "horse", "cow", "sheep", "pig", "animal", "pet", "mammal"}
-        plant_categories = {"flower", "tree", "plant", "fruit", "vegetable", "grass", "leaf", "garden", "blossom", "bloom"}
+        animal_categories = {"dog", "cat", "bird", "fish", "horse", "cow", "sheep", "pig", "animal", "pet", "mammal", "wildlife", "creature", "beast"}
+        plant_categories = {"flower", "tree", "plant", "fruit", "vegetable", "grass", "leaf", "garden", "blossom", "bloom", "foliage", "botanical"}
 
-        # Check if any animal or plant category is in candidates
-        has_animal = any(cat in candidates for cat in animal_categories)
-        has_plant = any(cat in candidates for cat in plant_categories)
+        # Check candidates for category keywords
+        has_animal_cat = any(cat in candidates for cat in animal_categories)
+        has_plant_cat = any(cat in candidates for cat in plant_categories)
 
-        if not (has_animal or has_plant):
+        # Also check raw caption for category keywords
+        has_animal_in_caption = any(cat in caption_lower for cat in animal_categories)
+        has_plant_in_caption = any(cat in caption_lower for cat in plant_categories)
+
+        # If category keywords found, do species detection
+        should_detect = has_animal_cat or has_plant_cat or has_animal_in_caption or has_plant_in_caption
+
+        if not should_detect:
             return []
 
         # Check each species label for matches in the caption
         for species in SPECIES_LABELS:
             species_lower = species.lower()
-            # Check if species name appears in caption
+            # Direct substring match
             if species_lower in caption_lower:
                 detected_species.append(species)
-            # Also check for common breed/common name variations
-            elif " " in species:
-                # For multi-word species like "golden retriever", also try individual words
+                continue
+            # For multi-word species like "golden retriever", check if all words match
+            if " " in species:
                 words = species_lower.split()
-                # If it's an animal/plant category and multiple words match
                 word_matches = sum(1 for w in words if w in caption_lower)
                 if word_matches >= 2 and word_matches == len(words):
-                    # All words matched - high confidence it's this species
                     detected_species.append(species)
 
         # Remove duplicates while preserving order
@@ -566,6 +582,34 @@ class ImageRecognitionService:
 
         logger.debug("Detected species: %s", unique_species)
         return unique_species
+
+    def _should_validate_species(self, candidates: list[str]) -> bool:
+        """Check if we should do species-level validation based on candidates."""
+        animal_categories = {"dog", "cat", "bird", "fish", "horse", "cow", "sheep", "pig", "animal", "pet", "mammal", "wildlife", "creature", "beast"}
+        plant_categories = {"flower", "tree", "plant", "fruit", "vegetable", "grass", "leaf", "garden", "blossom", "bloom", "foliage", "botanical"}
+        return any(cat in candidates for cat in animal_categories | plant_categories)
+
+    def _validate_species_labels(self, image: Image.Image, species_labels: list[str]) -> list[dict]:
+        """Validate species labels using zero-shot classification on the image.
+
+        Args:
+            image: PIL Image
+            species_labels: List of species labels to validate
+
+        Returns:
+            List of dicts with label and score, sorted by score descending
+        """
+        if not self.validation_pipe:
+            return []
+
+        try:
+            # Limit to top species to avoid too many queries
+            top_species = species_labels[:50]
+            results = self.validation_pipe(image, candidate_labels=top_species)
+            return sorted(results, key=lambda x: x.get("score", 0.0), reverse=True)
+        except Exception as exc:
+            logger.warning("Species validation failed: %s", exc)
+            return []
 
     def _resolve_device(self, device_preference: str) -> str:
         """Resolve which device to use (cuda or cpu)."""
