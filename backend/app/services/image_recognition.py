@@ -42,6 +42,48 @@ from transformers.modeling_utils import PreTrainedModel
 
 logger = logging.getLogger(__name__)
 
+# ======================
+# 照片大类（第二类标签 CLIP分类器
+# ======================
+# 方案中定义的14个照片大类（英文标签
+PHOTO_CATEGORIES = [
+    "a landscape photo of nature, mountains or ocean",
+    "a portrait photo of a person's face",
+    "a wildlife photo of wild animals or birds",
+    "a macro photo of insects or flowers close-up",
+    "a photo of astrophotography, stars or milky way at night",
+    "a street photography or humanistic documentary photo",
+    "a photo of architecture or buildings",
+    "a food photography photo",
+    "a sports or action photography photo",
+    "an underwater photography photo",
+    "an aerial drone photography photo",
+    "an abstract or creative photography photo",
+    "a still life or product photography photo",
+    "a flora photography of plants or flowers",
+]
+
+# 英文标签 -> 中文标签映射
+PHOTO_CATEGORY_LABELS = {
+    0:  ("Landscape", "风光"),
+    1:  ("Portrait", "人像"),
+    2:  ("Wildlife", "野生动物"),
+    3:  ("Macro", "微距"),
+    4:  ("Astrophotography", "星空摄影"),
+    5:  ("Street", "人文纪实"),
+    6:  ("Architecture", "建筑"),
+    7:  ("Food", "美食"),
+    8:  ("Sports", "运动"),
+    9:  ("Underwater", "水下"),
+    10: ("Aerial", "航拍"),
+    11: ("Abstract", "抽象"),
+    12: ("Still Life", "静物"),
+    13: ("Flora", "植物"),
+}
+
+# 回退大类
+DEFAULT_CATEGORY = ("General", "综合")
+
 # Florence-2 remote code can expect this attribute on older/newer transformer mixes.
 if not hasattr(PreTrainedModel, "_supports_sdpa"):
     PreTrainedModel._supports_sdpa = True
@@ -135,6 +177,9 @@ class ImageRecognitionService:
         self.caption_pipe: Optional[Any] = None
         self.validation_pipe = None
         self.auth_token = use_auth_token
+        # CLIP model for photo category classification
+        self.clip_model: Optional[Any] = None
+        self.clip_processor: Optional[Any] = None
         # Detect backend type: Florence vs BLIP-2 vs BLIP vs YOLOv8 vs use pipeline fallback
         self.is_florence = "florence" in (self.model_name or "").lower()
         self.is_blip2 = "blip2" in (self.model_name or "").lower()
@@ -295,6 +340,59 @@ class ImageRecognitionService:
                     logger.exception("Both strategies failed for %s", self.model_source)
                     raise
 
+        # Load CLIP model for photo category classification (第二类标签
+        try:
+            logger.info("=== Loading CLIP model for photo category classification...")
+            from transformers import CLIPProcessor, CLIPModel
+            self.clip_processor = CLIPProcessor.from_pretrained(
+                "openai/clip-vit-large-patch14",
+                **hf_kwargs
+            )
+            self.clip_model = CLIPModel.from_pretrained(
+                "openai/clip-vit-large-patch14",
+                torch_dtype=self.dtype,
+                **model_kwargs
+            ).to(self.device)
+            self.clip_model.eval()
+            logger.info("=== CLIP model loaded successfully ===")
+        except Exception as exc:
+            logger.warning("Failed to load CLIP model: %s, category classification disabled", exc)
+
+    def classify_photo_category(
+        self,
+        image: Image.Image,
+        confidence_threshold: float = 0.5,
+    ) -> tuple[tuple[str, str], float]:
+        """
+        照片大类分类（第二类标签
+
+        Returns:
+            ((英文标签, 中文标签), 置信度
+            如果置信度低于阈值，返回DEFAULT_CATEGORY和置信度
+        """
+        if not self.clip_model or not self.clip_processor:
+            logger.warning("CLIP model not available, returning default category")
+            return DEFAULT_CATEGORY, 0.0
+        try:
+            inputs = self.clip_processor(
+                text=PHOTO_CATEGORIES,
+                images=image,
+                return_tensors="pt",
+                padding=True
+            ).to(self.device)
+            with torch.no_grad():
+                logits = self.clip_model(**inputs).logits_per_image
+                probs = logits.softmax(dim=-1)
+                best_idx = probs.argmax().item()
+                confidence = probs[0][best_idx].item()
+            if confidence < confidence_threshold:
+                return DEFAULT_CATEGORY, confidence
+            label_en, label_zh = PHOTO_CATEGORY_LABELS.get(best_idx, DEFAULT_CATEGORY)
+            return (label_en, label_zh), confidence
+        except Exception as exc:
+            logger.exception("Photo category classification failed: %s", exc)
+            return DEFAULT_CATEGORY, 0.0
+
     def recognize_image(
         self,
         image_path: str,
@@ -309,13 +407,23 @@ class ImageRecognitionService:
             max_labels: Maximum number of labels to return
 
         Returns:
-            Dictionary containing recognition results
+            Dictionary containing recognition results including photo category (第二类标签 and elements (第三类标签
         """
         try:
             with Image.open(image_path).convert("RGB") as image:
+                # Step 1: 进行照片大类分类（第二类标签
+                (category_en, category_zh), category_conf = self.classify_photo_category(
+                    image,
+                    confidence_threshold=0.5
+                )
+
                 # Special handling for YOLOv8 - direct object detection with species labels
                 if self.is_yolov8 and hasattr(self, "yolo_model") and self.yolo_model is not None:
-                    return self._recognize_with_yolov8(image, image_path, confidence_threshold, max_labels)
+                    yolov8_result = self._recognize_with_yolov8(image, image_path, confidence_threshold, max_labels)
+                    yolov8_result["category_en"] = category_en
+                    yolov8_result["category_zh"] = category_zh
+                    yolov8_result["category_confidence"] = category_conf
+                    return yolov8_result
 
                 # Generate initial captions/descriptions
                 raw_caption = self._generate_caption(image)
@@ -364,7 +472,13 @@ class ImageRecognitionService:
 
                 results = results[:max_labels]
                 logger.debug("Final labels for %s: %s", image_path, results)
-                return {"labels": results, "raw_caption": raw_caption}
+                return {
+                    "labels": results, 
+                    "raw_caption": raw_caption,
+                    "category_en": category_en,
+                    "category_zh": category_zh,
+                    "category_confidence": category_conf
+                }
 
         except Exception as exc:
             logger.exception("Error recognizing image %s: %s", image_path, exc)
@@ -427,7 +541,8 @@ class ImageRecognitionService:
         """Recognize objects in an image using YOLOv8 directly.
 
         YOLOv8 provides direct object detection with bounding boxes and confidence scores.
-        This method extracts species-level labels directly from the detection results.
+        This method extracts species-level labels directly from the detection results,
+        and sorts them by (area × confidence) to prioritize more significant objects.
         """
         try:
             results = self.yolo_model(image, verbose=False)
@@ -445,14 +560,28 @@ class ImageRecognitionService:
                     conf = float(box.conf.cpu().numpy()[0])
                     if conf >= confidence_threshold:
                         label = names[cls_id]
-                        if label not in seen_labels or seen_labels[label] < conf:
-                            seen_labels[label] = conf
+                        # 计算边界框面积
+                        x1, y1, x2, y2 = box.xyxy.cpu().numpy()[0]
+                        area = (x2 - x1) * (y2 - y1)
+                        # 计算显著性分数 = 面积 × 置信度
+                        saliency = area * conf
+                        if label not in seen_labels or seen_labels[label]["saliency"] < saliency:
+                            seen_labels[label] = {
+                                "score": conf,
+                                "saliency": saliency
+                            }
 
-                for label, score in sorted(seen_labels.items(), key=lambda x: x[1], reverse=True):
+                # 按显著性排序（面积×置信度）
+                sorted_items = sorted(
+                    seen_labels.items(),
+                    key=lambda x: x[1]["saliency"],
+                    reverse=True
+                )
+                for label, data in sorted_items:
                     detected_objects.append({
                         "label": label,
-                        "score": score,
-                        "confidence_percentage": round(score * 100, 2),
+                        "score": data["score"],
+                        "confidence_percentage": round(data["score"] * 100, 2),
                     })
 
             detected_objects = detected_objects[:max_labels]

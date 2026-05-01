@@ -13,3 +13,4 @@ pydantic==2.11.4
 python-dotenv==1.1.0
 einops==0.8.2
 timm==1.0.26
+ultralytics==8.4.45

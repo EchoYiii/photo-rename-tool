@@ -7,3 +7,4 @@ backend/uploads/
 backend/outputs/
 *.pt
 yolov8n.pt
+.idea/
