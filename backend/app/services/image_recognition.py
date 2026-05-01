@@ -135,10 +135,11 @@ class ImageRecognitionService:
         self.caption_pipe: Optional[Any] = None
         self.validation_pipe = None
         self.auth_token = use_auth_token
-        # Detect backend type: Florence vs BLIP-2 vs BLIP vs use pipeline fallback
+        # Detect backend type: Florence vs BLIP-2 vs BLIP vs YOLOv8 vs use pipeline fallback
         self.is_florence = "florence" in (self.model_name or "").lower()
         self.is_blip2 = "blip2" in (self.model_name or "").lower()
         self.is_blip = "blip" in (self.model_name or "").lower() and not self.is_blip2
+        self.is_yolov8 = "yolov8" in (self.model_name or "").lower()
         self.device_preference = device_preference
         self.use_fast = use_fast
         self._load_models()
@@ -246,6 +247,21 @@ class ImageRecognitionService:
             except Exception as exc:
                 logger.exception("Failed to load BLIP model for %s: %s", self.model_source, exc)
                 raise
+        elif self.is_yolov8:
+            # YOLOv8 uses ultralytics for object detection
+            try:
+                from ultralytics import YOLO
+                logger.info("=== Loading YOLOv8 model (this may take a few minutes on first run) ===")
+                # Use yolov8n.pt (nano) for speed, can upgrade to yolov8s.pt, yolov8m.pt etc.
+                yolo_model_name = os.getenv("YOLO_MODEL", "yolov8n.pt")
+                self.yolo_model = YOLO(yolo_model_name)
+                # Set device
+                if self.device == "cuda":
+                    self.yolo_model.to("cuda")
+                logger.info("=== YOLOv8 model loaded successfully on %s ===", self.device)
+            except Exception as exc:
+                logger.exception("Failed to load YOLOv8 model: %s", exc)
+                raise
         else:
             # Fallback strategy: first try AutoModelForCausalLM, if fails use image-to-text pipeline
             try:
@@ -297,6 +313,10 @@ class ImageRecognitionService:
         """
         try:
             with Image.open(image_path).convert("RGB") as image:
+                # Special handling for YOLOv8 - direct object detection with species labels
+                if self.is_yolov8 and hasattr(self, "yolo_model") and self.yolo_model is not None:
+                    return self._recognize_with_yolov8(image, image_path, confidence_threshold, max_labels)
+
                 # Generate initial captions/descriptions
                 raw_caption = self._generate_caption(image)
                 logger.debug("Raw caption for %s: %s", image_path, raw_caption)
@@ -369,8 +389,81 @@ class ImageRecognitionService:
             return self._run_blip2_caption(image)
         elif self.is_blip:
             return self._run_blip_caption(image)
+        elif self.is_yolov8:
+            return self._run_yolov8_detection(image)
         else:
             return self._run_generic_caption(image)
+
+    def _run_yolov8_detection(self, image: Image.Image) -> str:
+        """Run YOLOv8 object detection and return species-level labels."""
+        if not hasattr(self, "yolo_model") or self.yolo_model is None:
+            return ""
+        try:
+            results = self.yolo_model(image, verbose=False)
+            if not results or len(results) == 0:
+                return ""
+            result = results[0]
+            names = result.names
+            detected_labels = []
+            if result.boxes is not None and len(result.boxes) > 0:
+                for box in result.boxes:
+                    cls_id = int(box.cls.cpu().numpy()[0])
+                    conf = float(box.conf.cpu().numpy()[0])
+                    if conf >= 0.25:
+                        label = names[cls_id]
+                        detected_labels.append(f"{label} ({conf:.2f})")
+            return "; ".join(detected_labels) if detected_labels else ""
+        except Exception as exc:
+            logger.warning("YOLOv8 detection failed: %s", exc)
+            return ""
+
+    def _recognize_with_yolov8(
+        self,
+        image: Image.Image,
+        image_path: str,
+        confidence_threshold: float = 0.60,
+        max_labels: int = 3,
+    ) -> dict[str, Any]:
+        """Recognize objects in an image using YOLOv8 directly.
+
+        YOLOv8 provides direct object detection with bounding boxes and confidence scores.
+        This method extracts species-level labels directly from the detection results.
+        """
+        try:
+            results = self.yolo_model(image, verbose=False)
+            if not results or len(results) == 0:
+                return {"labels": [], "raw_caption": "No objects detected"}
+
+            result = results[0]
+            names = result.names
+
+            detected_objects = []
+            if result.boxes is not None and len(result.boxes) > 0:
+                seen_labels = {}
+                for box in result.boxes:
+                    cls_id = int(box.cls.cpu().numpy()[0])
+                    conf = float(box.conf.cpu().numpy()[0])
+                    if conf >= confidence_threshold:
+                        label = names[cls_id]
+                        if label not in seen_labels or seen_labels[label] < conf:
+                            seen_labels[label] = conf
+
+                for label, score in sorted(seen_labels.items(), key=lambda x: x[1], reverse=True):
+                    detected_objects.append({
+                        "label": label,
+                        "score": score,
+                        "confidence_percentage": round(score * 100, 2),
+                    })
+
+            detected_objects = detected_objects[:max_labels]
+            raw_caption = ", ".join([f"{obj['label']} ({obj['confidence_percentage']}%)" for obj in detected_objects])
+
+            logger.debug("YOLOv8 detection for %s: %s", image_path, detected_objects)
+            return {"labels": detected_objects, "raw_caption": raw_caption}
+
+        except Exception as exc:
+            logger.exception("Error in YOLOv8 recognition for %s: %s", image_path, exc)
+            return {"labels": [], "raw_caption": str(exc), "error": True}
 
     def _run_florence_task(self, image: Image.Image, task_prompt: str) -> str:
         """Run a Florence-2 task (e.g. captioning)."""

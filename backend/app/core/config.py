@@ -38,6 +38,10 @@ class Settings:
             "label": "ViT-GPT2 图像描述（轻量、稳定）",
             "desc": "轻量级图像描述，资源需求低，可在 CPU 上运行但较慢。",
         },
+        "yolov8": {
+            "label": "YOLOv8 目标检测（物种识别专用）",
+            "desc": "基于 YOLOv8 的目标检测模型，可识别 1000+ 物体类别，包括多种鸟类、动物。支持 GPU/CPU。",
+        },
     }
     DEVICE_PREFERENCE = os.getenv("DEVICE_PREFERENCE", "auto").lower()
     CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.01"))
