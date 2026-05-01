@@ -50,7 +50,6 @@ if not hasattr(PreTrainedModel, "_supports_sdpa"):
 # These are used for zero-shot validation.
 CANDIDATE_LABELS = [
     "person", "portrait", "face", "group", "child", "baby",
-    "dog", "cat", "bird", "horse", "cow", "sheep", "fish",
     "car", "truck", "bus", "train", "bicycle", "motorcycle", "airplane", "boat",
     "building", "house", "bridge", "street", "city", "skyline",
     "beach", "sea", "lake", "river", "mountain", "forest", "tree", "flower", "garden", "snow",
@@ -58,6 +57,32 @@ CANDIDATE_LABELS = [
     "book", "document", "screen", "laptop", "computer", "phone", "television", "keyboard",
     "sofa", "chair", "bed", "room", "kitchen", "bathroom",
     "artwork", "painting", "poster", "logo", "text",
+]
+
+# Detailed species labels for enhanced animal and plant recognition
+SPECIES_LABELS = [
+    # Dogs
+    "golden retriever", "labrador", "bulldog", "poodle", "beagle", "German shepherd", "husky", "corgi", "shiba inu", "dalmatian",
+    # Cats
+    "persian cat", "siamese cat", "british shorthair", "ragdoll", "maine coon", "sphynx cat",
+    # Birds
+    "sparrow", "eagle", "owl", "parrot", "penguin", "flamingo", "peacock", "crow", "pigeon", "swan",
+    # Fish & Marine
+    "goldfish", "koi", "shark", "dolphin", "whale", "jellyfish", "turtle", "crab", "lobster",
+    # Animals
+    "elephant", "lion", "tiger", "giraffe", "zebra", "monkey", "bear", "panda", "koala", "fox", "rabbit", "deer", "wolf", "horse", "cow", "pig", "sheep", "goat",
+    # Insects
+    "butterfly", "bee", "ladybug", "dragonfly", "spider", "ant", "beetle", "moth", "grasshopper",
+    # Flowers
+    "rose", "sunflower", "tulip", "daisy", "lily", "orchid", "lotus", "cherry blossom", "lavender", "marigold", "hibiscus", "jasmine",
+    # Trees
+    "pine tree", "oak tree", "maple tree", "palm tree", "cherry tree", "bamboo", "willow", "cypress", "cedar",
+    # Plants
+    "grass", "cactus", "fern", "moss", "bamboo plant", "bush", "succulent", "vine", "mushroom",
+    # Fruits
+    "apple", "banana", "orange", "grape", "strawberry", "watermelon", "pineapple", "mango", "peach", "cherry",
+    # Vegetables
+    "carrot", "tomato", "potato", "broccoli", "lettuce", "corn", "cucumber", "pepper", "onion", "garlic",
 ]
 
 
@@ -255,6 +280,12 @@ class ImageRecognitionService:
 
                 if not candidates:
                     return {"labels": [], "raw_caption": raw_caption}
+
+                # Detect and add species-specific labels for animals and plants
+                species_candidates = self._detect_species(raw_caption, candidates)
+                if species_candidates:
+                    candidates = list(set(candidates + species_candidates))
+                    logger.debug("After species detection: %s", candidates)
 
                 # Validate candidates with zero-shot classifier
                 validated = self._validate_candidates(image, candidates)
@@ -484,6 +515,57 @@ class ImageRecognitionService:
         except Exception:
             logger.warning("Validation failed, returning candidates without validation")
             return [{"label": c, "score": 0.75} for c in candidates]
+
+    def _detect_species(self, raw_caption: str, candidates: list[str]) -> list[str]:
+        """Detect specific species from caption when animal/plant categories are detected.
+
+        Args:
+            raw_caption: The raw caption text from the model
+            candidates: Already extracted candidate labels
+
+        Returns:
+            List of specific species labels found in the caption
+        """
+        detected_species = []
+        caption_lower = raw_caption.lower()
+
+        # Define category keywords to check
+        animal_categories = {"dog", "cat", "bird", "fish", "horse", "cow", "sheep", "pig", "animal", "pet", "mammal"}
+        plant_categories = {"flower", "tree", "plant", "fruit", "vegetable", "grass", "leaf", "garden", "blossom", "bloom"}
+
+        # Check if any animal or plant category is in candidates
+        has_animal = any(cat in candidates for cat in animal_categories)
+        has_plant = any(cat in candidates for cat in plant_categories)
+
+        if not (has_animal or has_plant):
+            return []
+
+        # Check each species label for matches in the caption
+        for species in SPECIES_LABELS:
+            species_lower = species.lower()
+            # Check if species name appears in caption
+            if species_lower in caption_lower:
+                detected_species.append(species)
+            # Also check for common breed/common name variations
+            elif " " in species:
+                # For multi-word species like "golden retriever", also try individual words
+                words = species_lower.split()
+                # If it's an animal/plant category and multiple words match
+                word_matches = sum(1 for w in words if w in caption_lower)
+                if word_matches >= 2 and word_matches == len(words):
+                    # All words matched - high confidence it's this species
+                    detected_species.append(species)
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_species = []
+        for s in detected_species:
+            if s not in seen:
+                seen.add(s)
+                unique_species.append(s)
+
+        logger.debug("Detected species: %s", unique_species)
+        return unique_species
 
     def _resolve_device(self, device_preference: str) -> str:
         """Resolve which device to use (cuda or cpu)."""
