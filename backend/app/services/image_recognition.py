@@ -85,6 +85,33 @@ SPECIES_LABELS = [
     "carrot", "tomato", "potato", "broccoli", "lettuce", "corn", "cucumber", "pepper", "onion", "garlic",
 ]
 
+# Species labels organized by category for better targeted validation
+BIRD_LABELS = [
+    "sparrow", "eagle", "owl", "parrot", "penguin", "flamingo", "peacock", "crow", "pigeon", "swan",
+    "robin", "hummingbird", "woodpecker", "seagull", "dove", "chicken", "duck", "goose", "turkey",
+    "falcon", "hawk", "osprey", "canary", "finch", "warbler", "jay", "magpie", "raven",
+    "heron", "egret", "ibis", "stork", "crane", "pelican", "cormorant", "albatross",
+    "ostrich", "emu", "cassowary", "rhea", "kiwi", "toucan", "macaw", "cockatoo",
+    "lovebird", "parakeet", "budgerigar", "quail", "pheasant", "peafowl", "turkey",
+    "grouse", "ptarmigan", "prairie chicken", "guinea fowl", "turaco", "cuckoo",
+    "roadrunner", "hoatzin", "potoo", "nightjar", "swift", "kingfisher", "bee-eater",
+    "roller", "hoopoe", "hornbill", "barbet", "trogon", "quetzal", "motmot",
+    "jacamar", "puffbird", "toucan", "barbet", "woodpecker", "wryneck", "honeyguide",
+    "lyrebird", "scrubbird", "bowerbird", "riflebird", "bird of paradise",
+    "passerine", "songbird", "warbler", "thrush", "blackbird", "starling",
+    "myna", "mockingbird", "catbird", "wren", "nuthatch", "treecreeper",
+    "creeper", "dipper", "waxwing", "silky flycatcher", "shrike", "vireo",
+    "oriole", "blackbird", "grackle", "cowbird", "meadowlark", "bobolink",
+    "cardinal", "tanager", "grosbeak", "bunting", "siskin", "redpoll",
+    "crossbill", "linnet", "bullfinch", "chaffinch", "brambling", "hawfinch",
+    "greenfinch", "goldfinch", "siskin", "serin", "canary", "wild canary",
+    "house sparrow", "tree sparrow", "song sparrow", "white-throated sparrow"
+]
+DOG_LABELS = ["golden retriever", "labrador", "bulldog", "poodle", "beagle", "German shepherd", "husky", "corgi", "shiba inu", "dalmatian", "chihuahua", "yorkshire terrier", "dachshund", "pomeranian"]
+CAT_LABELS = ["persian cat", "siamese cat", "british shorthair", "maine coon", "sphynx cat", "bengal cat", "british shorthair", "scottish fold", "ragdoll", "exotic shorthair"]
+FLOWER_LABELS = ["rose", "sunflower", "tulip", "daisy", "lily", "orchid", "lotus", "cherry blossom", "lavender", "marigold", "hibiscus", "jasmine", "carnation", "violet", "dandelion", "peony"]
+TREE_LABELS = ["pine tree", "oak tree", "maple tree", "palm tree", "cherry tree", "bamboo", "willow", "cypress", "cedar", "apple tree", "birch tree"]
+
 
 class ImageRecognitionService:
     """Extract candidate elements and validate them with a confidence score."""
@@ -287,16 +314,19 @@ class ImageRecognitionService:
                     candidates = list(set(candidates + species_candidates))
                     logger.debug("After species detection: %s", candidates)
 
-                # If animal/plant category detected, also validate with species-specific labels
+                # If animal/plant category detected, use TARGETED species validation
                 if self._should_validate_species(candidates):
-                    species_validated = self._validate_species_labels(image, SPECIES_LABELS)
+                    # Get targeted labels based on detected category
+                    targeted_labels = self._get_targeted_species_labels(candidates, raw_caption)
+                    # Use lower threshold for species to improve recall
+                    species_threshold = 0.1
+                    species_validated = self._validate_species_labels(image, targeted_labels)
                     if species_validated:
-                        # Merge species validated results with candidates
                         for sv in species_validated:
-                            if sv.get("score", 0) >= confidence_threshold:
+                            if sv.get("score", 0) >= species_threshold:
                                 candidates.append(sv["label"])
                         candidates = list(set(candidates))
-                        logger.debug("After species zero-shot validation: %s", candidates)
+                        logger.debug("After targeted species zero-shot validation: %s", candidates)
 
                 # Validate candidates with zero-shot classifier
                 validated = self._validate_candidates(image, candidates)
@@ -588,6 +618,34 @@ class ImageRecognitionService:
         animal_categories = {"dog", "cat", "bird", "fish", "horse", "cow", "sheep", "pig", "animal", "pet", "mammal", "wildlife", "creature", "beast"}
         plant_categories = {"flower", "tree", "plant", "fruit", "vegetable", "grass", "leaf", "garden", "blossom", "bloom", "foliage", "botanical"}
         return any(cat in candidates for cat in animal_categories | plant_categories)
+
+    def _get_targeted_species_labels(self, candidates: list[str], caption: str) -> list[str]:
+        """Get targeted species labels based on detected category."""
+        caption_lower = caption.lower()
+        targets = []
+
+        # Check for bird
+        if "bird" in candidates or "bird" in caption_lower:
+            targets.extend(BIRD_LABELS)
+        # Check for dog
+        if "dog" in candidates or "dog" in caption_lower:
+            targets.extend(DOG_LABELS)
+        # Check for cat
+        if "cat" in candidates or "cat" in caption_lower:
+            targets.extend(CAT_LABELS)
+        # Check for flower
+        if "flower" in candidates or "flower" in caption_lower:
+            targets.extend(FLOWER_LABELS)
+        # Check for tree
+        if "tree" in candidates or "tree" in caption_lower:
+            targets.extend(TREE_LABELS)
+
+        # If no specific category found, use all species labels
+        if not targets:
+            targets = SPECIES_LABELS
+
+        # Remove duplicates
+        return list(set(targets))
 
     def _validate_species_labels(self, image: Image.Image, species_labels: list[str]) -> list[dict]:
         """Validate species labels using zero-shot classification on the image.
