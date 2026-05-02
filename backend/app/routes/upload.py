@@ -8,6 +8,10 @@ import os
 from datetime import datetime
 from uuid import uuid4
 
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 import torch
@@ -45,6 +49,161 @@ def _format_duration(total_seconds: float) -> str:
         return f"{hours:.1f} 小时"
 
 
+def _generate_score_excel(results: list[dict], errors: list[dict], output_path: str) -> None:
+    """生成照片评分Excel表格。"""
+    wb = Workbook()
+    
+    # 创建数据工作表
+    ws = wb.active
+    ws.title = "照片评分表"
+    
+    # 设置表头样式
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    header_alignment = Alignment(horizontal="center", vertical="center")
+    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), 
+                        top=Side(style='thin'), bottom=Side(style='thin'))
+    
+    # 表头列
+    headers = [
+        "序号", "原文件名", "新文件名", "照片类型", 
+        "标签", "最高置信度(%)", "评分", "处理状态"
+    ]
+    
+    # 写入表头
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_alignment
+        cell.border = thin_border
+    
+    # 设置数据行样式
+    data_alignment = Alignment(horizontal="left", vertical="center")
+    center_alignment = Alignment(horizontal="center", vertical="center")
+    
+    # 写入数据
+    row_num = 2
+    total_score = 0.0
+    success_count = 0
+    failed_count = len(errors)
+    
+    for result in results:
+        # 提取信息
+        original_name = result.get("original_filename", "")
+        renamed_name = result.get("renamed_filename", "")
+        status = result.get("status", "")
+        labels = result.get("labels", [])
+        
+        # 获取照片类型（从标签中提取）
+        photo_type = ""
+        max_confidence = 0.0
+        
+        for label in labels:
+            confidence = label.get("confidence_percentage", 0)
+            if confidence > max_confidence:
+                max_confidence = confidence
+        
+        # 生成标签字符串
+        label_str = ", ".join([label.get("label", "") for label in labels])
+        
+        # 计算评分（基于最高置信度）
+        # 评分规则：置信度 >= 90%: 90-100分, 70-89%: 70-89分, 50-69%: 50-69分, <50%: 0-49分
+        if max_confidence >= 90:
+            score = round(90 + (max_confidence - 90) * 1)
+        elif max_confidence >= 70:
+            score = round(70 + (max_confidence - 70) * 0.95)
+        elif max_confidence >= 50:
+            score = round(50 + (max_confidence - 50) * 0.95)
+        else:
+            score = round(max_confidence * 0.98)
+        
+        score = max(0, min(100, score))
+        total_score += score
+        success_count += 1
+        
+        # 处理状态映射
+        status_display = {
+            "renamed": "已重命名",
+            "kept_original_name": "保留原名",
+        }.get(status, status)
+        
+        # 写入数据行
+        ws.cell(row=row_num, column=1, value=row_num - 1).alignment = center_alignment
+        ws.cell(row=row_num, column=2, value=original_name).alignment = data_alignment
+        ws.cell(row=row_num, column=3, value=renamed_name).alignment = data_alignment
+        ws.cell(row=row_num, column=4, value=photo_type).alignment = data_alignment
+        ws.cell(row=row_num, column=5, value=label_str).alignment = data_alignment
+        ws.cell(row=row_num, column=6, value=round(max_confidence, 2)).alignment = center_alignment
+        ws.cell(row=row_num, column=7, value=round(score, 1)).alignment = center_alignment
+        ws.cell(row=row_num, column=8, value=status_display).alignment = center_alignment
+        
+        row_num += 1
+    
+    # 写入错误记录
+    for error in errors:
+        original_name = error.get("filename", "")
+        error_msg = error.get("error", "")
+        
+        ws.cell(row=row_num, column=1, value=row_num - 1).alignment = center_alignment
+        ws.cell(row=row_num, column=2, value=original_name).alignment = data_alignment
+        ws.cell(row=row_num, column=3, value="").alignment = data_alignment
+        ws.cell(row=row_num, column=4, value="").alignment = data_alignment
+        ws.cell(row=row_num, column=5, value="").alignment = data_alignment
+        ws.cell(row=row_num, column=6, value="").alignment = center_alignment
+        ws.cell(row=row_num, column=7, value="").alignment = center_alignment
+        ws.cell(row=row_num, column=8, value=f"处理失败: {error_msg}").alignment = data_alignment
+        
+        row_num += 1
+    
+    # 添加统计信息
+    row_num += 2
+    ws.cell(row=row_num, column=1, value="统计信息").font = Font(bold=True)
+    
+    row_num += 1
+    ws.cell(row=row_num, column=2, value="总照片数:").alignment = data_alignment
+    ws.cell(row=row_num, column=3, value=len(results) + len(errors)).alignment = center_alignment
+    
+    row_num += 1
+    ws.cell(row=row_num, column=2, value="成功处理:").alignment = data_alignment
+    ws.cell(row=row_num, column=3, value=success_count).alignment = center_alignment
+    
+    row_num += 1
+    ws.cell(row=row_num, column=2, value="处理失败:").alignment = data_alignment
+    ws.cell(row=row_num, column=3, value=failed_count).alignment = center_alignment
+    
+    row_num += 1
+    ws.cell(row=row_num, column=2, value="成功率:").alignment = data_alignment
+    success_rate = (success_count / (len(results) + len(errors))) * 100 if (len(results) + len(errors)) > 0 else 0
+    ws.cell(row=row_num, column=3, value=f"{success_rate:.1f}%").alignment = center_alignment
+    
+    row_num += 1
+    ws.cell(row=row_num, column=2, value="平均评分:").alignment = data_alignment
+    avg_score = total_score / success_count if success_count > 0 else 0
+    ws.cell(row=row_num, column=3, value=f"{avg_score:.1f}").alignment = center_alignment
+    
+    # 自动调整列宽
+    for col in range(1, len(headers) + 1):
+        max_length = 0
+        column = ws[get_column_letter(col)]
+        for cell in column:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except:
+                pass
+        adjusted_width = min(max_length + 2, 50)
+        ws.column_dimensions[get_column_letter(col)].width = adjusted_width
+    
+    # 确保输出目录存在
+    output_dir = os.path.dirname(output_path)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    # 保存文件
+    wb.save(output_path)
+
+
 def translate_label(label: str, language: str) -> str:
     """Translate a label to the specified language.
     
@@ -71,6 +230,7 @@ def translate_label(label: str, language: str) -> str:
 class DirectoryProcessRequest(BaseModel):
     source_path: str = Field(..., description="Directory containing images to process.")
     output_path: str = Field(..., description="Directory to write renamed images into.")
+    score_output_path: str = Field(default="", description="Optional path to output score Excel file.")
     recursive: bool = Field(default=True, description="Whether to scan subdirectories.")
     confidence_threshold: float = Field(default=settings.CONFIDENCE_THRESHOLD, ge=0.0, le=1.0)
     # Allow clients to submit any integer >=1 and clamp server-side to the configured maximum.
@@ -292,6 +452,15 @@ def _process_directory_sync(job_id: str, payload: DirectoryProcessRequest, image
         # 使用一个估算值作为后备
         job["total_duration_seconds"] = 0.0
         job["total_duration_formatted"] = "< 1 秒"
+
+    # 生成照片评分Excel表格
+    if payload.score_output_path:
+        try:
+            _generate_score_excel(results, errors, payload.score_output_path)
+            logger.info(f"Score Excel file generated at: {payload.score_output_path}")
+            job["score_output_path"] = payload.score_output_path
+        except Exception as e:
+            logger.exception(f"Failed to generate score Excel: {e}")
 
 
 async def _run_directory_job(job_id: str, payload: DirectoryProcessRequest, image_paths: list[str], output_dir: str) -> None:
