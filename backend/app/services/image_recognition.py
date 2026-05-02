@@ -36,7 +36,10 @@ from transformers import (
     BlipForConditionalGeneration,
     BlipProcessor,
     Florence2ForConditionalGeneration,
+    GPT2Tokenizer,
+    ViTImageProcessor,
     pipeline,
+    VisionEncoderDecoderModel,
 )
 from transformers.modeling_utils import PreTrainedModel
 
@@ -154,6 +157,34 @@ CAT_LABELS = ["persian cat", "siamese cat", "british shorthair", "maine coon", "
 FLOWER_LABELS = ["rose", "sunflower", "tulip", "daisy", "lily", "orchid", "lotus", "cherry blossom", "lavender", "marigold", "hibiscus", "jasmine", "carnation", "violet", "dandelion", "peony"]
 TREE_LABELS = ["pine tree", "oak tree", "maple tree", "palm tree", "cherry tree", "bamboo", "willow", "cypress", "cedar", "apple tree", "birch tree"]
 
+GENERIC_TO_SPECIFIC = {
+    "dog": set(DOG_LABELS),
+    "dogs": set(DOG_LABELS),
+    "puppy": set(DOG_LABELS),
+    "puppies": set(DOG_LABELS),
+    "cat": set(CAT_LABELS),
+    "cats": set(CAT_LABELS),
+    "kitten": set(CAT_LABELS),
+    "kittens": set(CAT_LABELS),
+    "bird": set(BIRD_LABELS),
+    "birds": set(BIRD_LABELS),
+    "flower": set(FLOWER_LABELS),
+    "flowers": set(FLOWER_LABELS),
+    "blossom": set(FLOWER_LABELS),
+    "bloom": set(FLOWER_LABELS),
+    "tree": set(TREE_LABELS),
+    "trees": set(TREE_LABELS),
+    "plant": set(SPECIES_LABELS),
+    "plants": set(SPECIES_LABELS),
+    "animal": set(SPECIES_LABELS),
+    "animals": set(SPECIES_LABELS),
+    "wildlife": set(SPECIES_LABELS),
+    "pet": set(DOG_LABELS) | set(CAT_LABELS),
+    "pets": set(DOG_LABELS) | set(CAT_LABELS),
+    "insect": set(SPECIES_LABELS),
+    "butterfly": set(SPECIES_LABELS),
+}
+
 
 class ImageRecognitionService:
     """Extract candidate elements and validate them with a confidence score."""
@@ -173,6 +204,8 @@ class ImageRecognitionService:
         self.model_source = self._resolve_model_source(model_name)
         self.validation_model_source = self._resolve_model_source(validation_model_name)
         self.processor: Optional[AutoProcessor] = None
+        self.image_processor: Optional[ViTImageProcessor] = None
+        self.text_processor: Optional[GPT2Tokenizer] = None
         self.caption_model: Optional[Any] = None
         self.caption_pipe: Optional[Any] = None
         self.validation_pipe = None
@@ -308,15 +341,13 @@ class ImageRecognitionService:
                 logger.exception("Failed to load YOLOv8 model: %s", exc)
                 raise
         else:
-            # Fallback strategy: first try AutoModelForCausalLM, if fails use image-to-text pipeline
+            # Fallback strategy: first try VisionEncoderDecoderModel (for ViT-GPT2, etc.),
+            # if fails try AutoModelForCausalLM, then image-to-text pipeline
             try:
-                logger.info("=== Strategy 1: Trying AutoModelForCausalLM for %s ===", self.model_source)
-                self.processor = AutoProcessor.from_pretrained(
-                    self.model_source,
-                    use_fast=self.use_fast,
-                    **hf_kwargs,
-                )
-                self.caption_model = AutoModelForCausalLM.from_pretrained(
+                logger.info("=== Strategy 1: Trying VisionEncoderDecoderModel for %s ===", self.model_source)
+                self.image_processor = ViTImageProcessor.from_pretrained(self.model_source)
+                self.text_processor = GPT2Tokenizer.from_pretrained(self.model_source)
+                self.caption_model = VisionEncoderDecoderModel.from_pretrained(
                     self.model_source,
                     torch_dtype=self.dtype,
                     low_cpu_mem_usage=True,
@@ -324,21 +355,39 @@ class ImageRecognitionService:
                 ).to(self.device)
                 self.caption_model.eval()
                 self.caption_pipe = None
-                logger.info("=== Model loaded successfully with AutoModelForCausalLM ===")
-            except Exception as exc1:
-                logger.warning("AutoModelForCausalLM failed: %s, trying pipeline fallback", exc1)
+                logger.info("=== Model loaded successfully with VisionEncoderDecoderModel ===")
+            except Exception as exc0:
+                logger.warning("VisionEncoderDecoderModel failed: %s, trying AutoModelForCausalLM", exc0)
                 try:
-                    logger.info("=== Strategy 2: Trying image-to-text pipeline ===")
-                    self.caption_pipe = pipeline(
-                        "image-to-text",
-                        model=self.model_source,
-                        device=0 if self.device == "cuda" else -1,
+                    logger.info("=== Strategy 2: Trying AutoModelForCausalLM for %s ===", self.model_source)
+                    self.processor = AutoProcessor.from_pretrained(
+                        self.model_source,
+                        use_fast=self.use_fast,
                         **hf_kwargs,
                     )
-                    logger.info("=== Model loaded successfully with image-to-text pipeline ===")
-                except Exception as exc2:
-                    logger.exception("Both strategies failed for %s", self.model_source)
-                    raise
+                    self.caption_model = AutoModelForCausalLM.from_pretrained(
+                        self.model_source,
+                        torch_dtype=self.dtype,
+                        low_cpu_mem_usage=True,
+                        **model_kwargs,
+                    ).to(self.device)
+                    self.caption_model.eval()
+                    self.caption_pipe = None
+                    logger.info("=== Model loaded successfully with AutoModelForCausalLM ===")
+                except Exception as exc1:
+                    logger.warning("AutoModelForCausalLM failed: %s, trying pipeline fallback", exc1)
+                    try:
+                        logger.info("=== Strategy 3: Trying image-to-text pipeline ===")
+                        self.caption_pipe = pipeline(
+                            "image-to-text",
+                            model=self.model_source,
+                            device=0 if self.device == "cuda" else -1,
+                            **hf_kwargs,
+                        )
+                        logger.info("=== Model loaded successfully with image-to-text pipeline ===")
+                    except Exception as exc2:
+                        logger.exception("All strategies failed for %s", self.model_source)
+                        raise
 
         # Load CLIP model for photo category classification (第二类标签
         try:
@@ -486,6 +535,7 @@ class ImageRecognitionService:
                             "confidence_percentage": round(score * 100, 2),
                         })
 
+                results = self._deduplicate_similar_labels(results)
                 results = results[:max_labels]
                 logger.debug("Final labels for %s: %s", image_path, results)
                 return {
@@ -685,16 +735,19 @@ class ImageRecognitionService:
 
     def _run_generic_caption(self, image: Image.Image) -> str:
         """Run generic image captioning (ViT-GPT2, etc.)."""
-        if not self.processor or not self.caption_model:
+        if not self.image_processor or not self.text_processor or not self.caption_model:
             return ""
 
         try:
-            inputs = self.processor(image, return_tensors="pt").to(self.device)
+            image_inputs = self.image_processor(image, return_tensors="pt").to(self.device)
 
             with torch.no_grad():
-                generated_ids = self.caption_model.generate(**inputs, max_length=100)
+                generated_ids = self.caption_model.generate(
+                    pixel_values=image_inputs.pixel_values,
+                    max_length=100
+                )
 
-            generated_text = self.processor.batch_decode(
+            generated_text = self.text_processor.batch_decode(
                 generated_ids,
                 skip_special_tokens=True,
             )[0]
@@ -899,6 +952,31 @@ class ImageRecognitionService:
 
         # Remove duplicates
         return list(set(targets))
+
+    def _deduplicate_similar_labels(self, results: list[dict]) -> list[dict]:
+        """Remove generic labels when a specific species label from the same category exists.
+
+        For example: if results contain both 'dog' and 'golden retriever', only keep
+        'golden retriever' since it is more specific.
+        """
+        if not results:
+            return results
+
+        result_labels = [r["label"] for r in results]
+        generic_labels_to_remove = set()
+
+        for result in results:
+            label = result["label"].lower()
+            if label in GENERIC_TO_SPECIFIC:
+                specific_set = GENERIC_TO_SPECIFIC[label]
+                for specific_label in specific_set:
+                    if specific_label.lower() in result_labels:
+                        generic_labels_to_remove.add(result["label"])
+                        break
+
+        deduplicated = [r for r in results if r["label"] not in generic_labels_to_remove]
+        logger.debug("After label deduplication: removed generic labels %s, kept %s", generic_labels_to_remove, [r["label"] for r in deduplicated])
+        return deduplicated
 
     def _validate_species_labels(self, image: Image.Image, species_labels: list[str]) -> list[dict]:
         """Validate species labels using zero-shot classification on the image.

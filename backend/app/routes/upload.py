@@ -467,22 +467,7 @@ async def health_check() -> dict:
 @router.get("/info")
 async def get_info() -> dict:
     """Frontend configuration payload."""
-    model_source = settings.MODEL_NAME
-    validation_source = settings.VALIDATION_MODEL_NAME
-    device = "unknown"
-    try:
-        recognition_service = get_recognition_service(
-            settings.MODEL_NAME,
-            settings.VALIDATION_MODEL_NAME,
-            settings.DEVICE_PREFERENCE,
-            use_fast=True,
-        )
-        model_source = recognition_service.model_source
-        validation_source = recognition_service.validation_model_source
-        device = recognition_service.device
-    except Exception:
-        logger.warning("Recognition service was not ready while building /info payload.", exc_info=True)
-
+    # 不要在这里加载模型！否则会阻塞 /info 接口响应
     return {
         "model": settings.MODEL_NAME,
         "validation_model": settings.VALIDATION_MODEL_NAME,
@@ -495,12 +480,12 @@ async def get_info() -> dict:
             }
             for name, value in settings.SUPPORTED_ELEMENT_RECOGNITION_MODELS.items()
         ],
-        "model_source": model_source,
-        "validation_model_source": validation_source,
+        "model_source": settings.MODEL_NAME,
+        "validation_model_source": settings.VALIDATION_MODEL_NAME,
         "confidence_threshold": settings.CONFIDENCE_THRESHOLD,
         "max_labels": settings.MAX_LABELS,
         "device_preference": settings.DEVICE_PREFERENCE,
-        "device": device,
+        "device": settings.DEVICE_PREFERENCE,
         "cuda_available": torch.cuda.is_available(),
         "torch_version": torch.__version__,
         "allowed_extensions": sorted(settings.ALLOWED_EXTENSIONS),

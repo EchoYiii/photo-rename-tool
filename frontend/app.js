@@ -8,7 +8,6 @@ const submitButton = document.getElementById('submit-btn');
 const cancelButton = document.getElementById('cancel-btn');
 const confidenceRange = document.getElementById('confidence_threshold');
 const confidenceInput = document.getElementById('confidence_threshold_input');
-const confidenceDisplay = document.getElementById('confidence_display');
 const elementModelSelect = document.getElementById('element_model');
 const elementModelInfo = document.getElementById('element_model_info');
 let serverElementModels = null;
@@ -24,7 +23,8 @@ const progressCount = document.getElementById('progress-count');
 const pauseBtn = document.getElementById('pause-btn');
 const resumeBtn = document.getElementById('resume-btn');
 
-const apiBase = "/api/v1";
+const isLocalFile = window.location.protocol === 'file:';
+const apiBase = isLocalFile ? 'http://localhost:8000/api/v1' : '/api/v1';
 let activeJobId = null;
 let activePollTimer = null;
 let serverMaxLabels = null;
@@ -44,8 +44,6 @@ function setConfidenceValue(value) {
   const displayValue = normalized.toFixed(2);
   confidenceRange.value = displayValue;
   confidenceInput.value = displayValue;
-  confidenceDisplay.value = displayValue;
-  confidenceDisplay.textContent = displayValue;
 }
 
 function updateProgress(job) {
@@ -275,7 +273,7 @@ async function fetchInfo() {
     renderMeta(data);
     hideBanner();
   } catch (error) {
-    const message = window.location.protocol === 'file:'
+    const message = isLocalFile
       ? '当前页面通过文件协议打开，元素模型筛选器需要通过本地服务访问：例如 http://127.0.0.1:8000'
       : '无法连接本地后端，请先启动 FastAPI 服务。';
     showBanner(message);
@@ -396,7 +394,7 @@ confidenceInput.addEventListener('input', (event) => {
   setConfidenceValue(event.target.value);
 });
 
-setConfidenceValue(0.01);
+setConfidenceValue(0.05);
 resetProgress();
 fetchInfo();
 

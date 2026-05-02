@@ -44,8 +44,8 @@ class Settings:
         },
     }
     DEVICE_PREFERENCE = os.getenv("DEVICE_PREFERENCE", "cpu").lower()
-    CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.01"))
-    MAX_LABELS = int(os.getenv("MAX_LABELS", "10"))
+    CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.05"))
+    MAX_LABELS = int(os.getenv("MAX_LABELS", "3"))
     DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
     ALLOWED_ORIGINS = [
