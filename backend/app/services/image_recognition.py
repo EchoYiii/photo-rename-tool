@@ -152,10 +152,31 @@ BIRD_LABELS = [
     "greenfinch", "goldfinch", "siskin", "serin", "canary", "wild canary",
     "house sparrow", "tree sparrow", "song sparrow", "white-throated sparrow"
 ]
-DOG_LABELS = ["golden retriever", "labrador", "bulldog", "poodle", "beagle", "German shepherd", "husky", "corgi", "shiba inu", "dalmatian", "chihuahua", "yorkshire terrier", "dachshund", "pomeranian"]
-CAT_LABELS = ["persian cat", "siamese cat", "british shorthair", "maine coon", "sphynx cat", "bengal cat", "british shorthair", "scottish fold", "ragdoll", "exotic shorthair"]
-FLOWER_LABELS = ["rose", "sunflower", "tulip", "daisy", "lily", "orchid", "lotus", "cherry blossom", "lavender", "marigold", "hibiscus", "jasmine", "carnation", "violet", "dandelion", "peony"]
-TREE_LABELS = ["pine tree", "oak tree", "maple tree", "palm tree", "cherry tree", "bamboo", "willow", "cypress", "cedar", "apple tree", "birch tree"]
+DOG_LABELS = ["golden retriever", "labrador", "bulldog", "poodle", "beagle", "German shepherd", "husky", "corgi", "shiba inu", "dalmatian", "chihuahua", "yorkshire terrier", "dachshund", "pomeranian", "boxer", "rottweiler", "doberman", "great dane", "mastiff", "border collie", "australian shepherd", "beagle", "shih tzu", "pembroke welsh corgi", "siberian husky"]
+CAT_LABELS = ["persian cat", "siamese cat", "british shorthair", "maine coon", "sphynx cat", "bengal cat", "british shorthair", "scottish fold", "ragdoll", "exotic shorthair", "russian blue", "abyssinian", "siberian cat", "norwegian forest cat", "burmese cat", "tonkinese", "himalayan cat", "bombay cat", "devon rex", "cornish rex"]
+FLOWER_LABELS = [
+    "rose", "sunflower", "tulip", "daisy", "lily", "orchid", "lotus", "cherry blossom", "lavender", "marigold", "hibiscus", "jasmine", "carnation", "violet", "dandelion", "peony",
+    "chrysanthemum", "iris", "daffodil", "gladiolus", "carnation", "petunia", "begonia", "camellia", "azalea", "hydrangea", "gardenia", "plumeria", "bird of paradise", "anemone", "poppy", "zinnia", "gerbera", "snapdragon", "aster", "delphinium", "foxglove", "sweet pea", "nigella", "calendula", "coreopsis", "black-eyed susan", "coneflower", "blanket flower", "yarrow", "sedum", "hosta", "lily of the valley", "bluebell", "crocus", "hyacinth", "snowdrop", "buttercup", "forget-me-not", "lobelia", "pansy", "impatiens", "fuchsia", "geranium", "magnolia", "wisteria", "clematis", "rhododendron",
+]
+TREE_LABELS = [
+    "pine tree", "oak tree", "maple tree", "palm tree", "cherry tree", "bamboo", "willow", "cypress", "cedar", "apple tree", "birch tree",
+    "elm tree", "beech tree", "ash tree", "poplar tree", "spruce tree", "fir tree", "hemlock tree", "sequoia", "redwood tree", "baobab tree", "eucalyptus tree", "olive tree", "fig tree", "orange tree", "lemon tree", "lime tree", "peach tree", "plum tree", "apricot tree", "mangrove tree", "coconut tree", "banana tree", "coffee tree", "cocoa tree", "rubber tree", "banyan tree", "weeping willow", "japanese maple", "dawn redwood", "ginkgo tree", "dogwood tree", "magnolia tree", "tulip tree", "liquidambar", "catalpa tree", "honeylocust", "black walnut", "pecan tree", "chestnut tree", "hazelnut tree", "hawthorn tree", "crabapple tree",
+]
+WILDLIFE_LABELS = [
+    "lion", "tiger", "leopard", "cheetah", "jaguar", "panther", "puma", "cougar", "bobcat", "lynx",
+    "elephant", "rhino", "hippo", "giraffe", "zebra", "horse", "donkey", "mule", "buffalo", "bison", "yak", "ox",
+    "deer", "elk", "moose", "reindeer", "caribou", "antelope", "gazelle", "impala", "gemsbok", "oryx",
+    "bear", "polar bear", "panda", "koala", "raccoon", "skunk", "badger", "otter", "marten", "weasel",
+    "wolf", "coyote", "jackal", "fox", "wild dog", "hyena",
+    "monkey", "ape", "gorilla", "chimpanzee", "orangutan", "gibbon", "lemur", "baboon", "mandrill",
+    "rabbit", "hare", "squirrel", "chipmunk", "marmot", "beaver", "porcupine", "hedgehog",
+    "kangaroo", "wallaby", "opossum", "bandicoot",
+    "penguin", "flamingo", "peacock", "pigeon", "swan", "crane", "heron", "stork", "pelican", "owl", "eagle", "falcon", "hawk", "osprey", "kingfisher", "parrot", "macaw", "cockatoo",
+    "alligator", "crocodile", "lizard", "gecko", "chameleon", "iguana", "snake", "python", "cobra", "viper", "turtle", "tortoise", "terrapin",
+    "frog", "toad", "salamander", "newt", "axolotl",
+    "shark", "whale", "dolphin", "porpoise", "seal", "sea lion", "walrus",
+    "butterfly", "moth", "bee", "wasp", "dragonfly", "damselfly", "grasshopper", "cricket", "ladybug", "beetle", "ant", "spider", "scorpion"
+]
 
 GENERIC_TO_SPECIFIC = {
     "dog": set(DOG_LABELS),
@@ -174,11 +195,14 @@ GENERIC_TO_SPECIFIC = {
     "bloom": set(FLOWER_LABELS),
     "tree": set(TREE_LABELS),
     "trees": set(TREE_LABELS),
-    "plant": set(SPECIES_LABELS),
-    "plants": set(SPECIES_LABELS),
-    "animal": set(SPECIES_LABELS),
-    "animals": set(SPECIES_LABELS),
-    "wildlife": set(SPECIES_LABELS),
+    "plant": set(FLOWER_LABELS) | set(TREE_LABELS),
+    "plants": set(FLOWER_LABELS) | set(TREE_LABELS),
+    "flora": set(FLOWER_LABELS) | set(TREE_LABELS),
+    "wildlife": set(WILDLIFE_LABELS),
+    "wild animal": set(WILDLIFE_LABELS),
+    "wild animals": set(WILDLIFE_LABELS),
+    "animal": set(WILDLIFE_LABELS) | set(DOG_LABELS) | set(CAT_LABELS),
+    "animals": set(WILDLIFE_LABELS) | set(DOG_LABELS) | set(CAT_LABELS),
     "pet": set(DOG_LABELS) | set(CAT_LABELS),
     "pets": set(DOG_LABELS) | set(CAT_LABELS),
     "insect": set(SPECIES_LABELS),
@@ -502,18 +526,59 @@ class ImageRecognitionService:
                         if bird_labels:
                             candidates = list(set(candidates + bird_labels))
                             logger.debug("Extended candidates with %d bird species for validation", len(bird_labels))
+                    # IMPORTANT: When plant/flora category is detected, extend candidates with ALL plant species
+                    is_plant_detected = any(cat in candidates for cat in ["plant", "plants", "flower", "flowers", "tree", "trees", "flora", "blossom", "bloom"])
+                    if is_plant_detected:
+                        plant_labels = [p for p in (FLOWER_LABELS + TREE_LABELS) if p.lower() not in [c.lower() for c in candidates]]
+                        if plant_labels:
+                            candidates = list(set(candidates + plant_labels))
+                            logger.debug("Extended candidates with %d plant species for validation", len(plant_labels))
+                    # IMPORTANT: When wildlife category is detected, extend candidates with ALL wildlife species
+                    is_wildlife_detected = any(cat in candidates for cat in ["wildlife", "wild animal", "wild animals", "animal", "animals"])
+                    if is_wildlife_detected:
+                        wildlife_labels = [w for w in WILDLIFE_LABELS if w.lower() not in [c.lower() for c in candidates]]
+                        if wildlife_labels:
+                            candidates = list(set(candidates + wildlife_labels))
+                            logger.debug("Extended candidates with %d wildlife species for validation", len(wildlife_labels))
                     # Use lower threshold for species to improve recall
                     species_threshold = 0.1
                     species_validated = self._validate_species_labels(image, targeted_labels)
                     if species_validated:
                         # If bird category detected, only keep the top 1 bird species
                         is_bird_detected = "bird" in candidates or "bird" in raw_caption.lower()
+                        # If plant/flora category detected, only keep the top 1 plant species
+                        is_plant_only = is_plant_detected and not is_bird_detected and not is_wildlife_detected
+                        # If wildlife category detected, only keep the top 1 wildlife species
+                        is_wildlife_only = is_wildlife_detected and not is_bird_detected and not is_plant_detected
+
                         if is_bird_detected:
                             bird_species = [sv for sv in species_validated if sv.get("label", "").lower() in [b.lower() for b in BIRD_LABELS]]
                             if bird_species:
                                 top_bird = bird_species[0]
                                 candidates = [top_bird["label"]]
                                 logger.debug("Bird species detected, only keeping top match: %s", top_bird["label"])
+                        elif is_plant_only:
+                            plant_species = [sv for sv in species_validated if sv.get("label", "").lower() in [p.lower() for p in FLOWER_LABELS + TREE_LABELS]]
+                            if plant_species:
+                                top_plant = plant_species[0]
+                                candidates = [top_plant["label"]]
+                                logger.debug("Plant species detected, only keeping top match: %s", top_plant["label"])
+                            else:
+                                for sv in species_validated:
+                                    if sv.get("score", 0) >= species_threshold:
+                                        candidates.append(sv["label"])
+                                candidates = list(set(candidates))
+                        elif is_wildlife_only:
+                            wildlife_species = [sv for sv in species_validated if sv.get("label", "").lower() in [w.lower() for w in WILDLIFE_LABELS]]
+                            if wildlife_species:
+                                top_wildlife = wildlife_species[0]
+                                candidates = [top_wildlife["label"]]
+                                logger.debug("Wildlife species detected, only keeping top match: %s", top_wildlife["label"])
+                            else:
+                                for sv in species_validated:
+                                    if sv.get("score", 0) >= species_threshold:
+                                        candidates.append(sv["label"])
+                                candidates = list(set(candidates))
                         else:
                             for sv in species_validated:
                                 if sv.get("score", 0) >= species_threshold:
@@ -861,9 +926,9 @@ class ImageRecognitionService:
         detected_species = []
         caption_lower = raw_caption.lower()
 
-        # Define category keywords to check
-        animal_categories = {"dog", "cat", "bird", "fish", "horse", "cow", "sheep", "pig", "animal", "pet", "mammal", "wildlife", "creature", "beast"}
-        plant_categories = {"flower", "tree", "plant", "fruit", "vegetable", "grass", "leaf", "garden", "blossom", "bloom", "foliage", "botanical"}
+        # Define category keywords to check (expanded for wildlife and plants)
+        animal_categories = {"dog", "cat", "bird", "fish", "horse", "cow", "sheep", "pig", "animal", "pet", "mammal", "wildlife", "wild animal", "wild animals", "creature", "beast"}
+        plant_categories = {"flower", "tree", "plant", "plants", "fruit", "vegetable", "grass", "leaf", "garden", "blossom", "bloom", "foliage", "botanical", "flora"}
 
         # Check candidates for category keywords
         has_animal_cat = any(cat in candidates for cat in animal_categories)
@@ -908,6 +973,48 @@ class ImageRecognitionService:
                     if word_matches >= 2 and word_matches == len(words):
                         detected_species.append(bird)
 
+        # For wildlife detection, check WILDLIFE_LABELS for specific wildlife species in caption
+        if has_animal_cat or has_animal_in_caption:
+            for wildlife in WILDLIFE_LABELS:
+                wildlife_lower = wildlife.lower()
+                if wildlife_lower in caption_lower:
+                    detected_species.append(wildlife)
+                    continue
+                # For multi-word wildlife names like "polar bear", check if all words match
+                if " " in wildlife:
+                    words = wildlife_lower.split()
+                    word_matches = sum(1 for w in words if w in caption_lower)
+                    if word_matches >= 2 and word_matches == len(words):
+                        detected_species.append(wildlife)
+
+        # For plant/flower detection, check FLOWER_LABELS for specific flower species in caption
+        if has_plant_cat or has_plant_in_caption:
+            for flower in FLOWER_LABELS:
+                flower_lower = flower.lower()
+                if flower_lower in caption_lower:
+                    detected_species.append(flower)
+                    continue
+                # For multi-word flower names like "cherry blossom", check if all words match
+                if " " in flower:
+                    words = flower_lower.split()
+                    word_matches = sum(1 for w in words if w in caption_lower)
+                    if word_matches >= 2 and word_matches == len(words):
+                        detected_species.append(flower)
+
+        # For tree detection, check TREE_LABELS for specific tree species in caption
+        if "tree" in candidates or "tree" in caption_lower or has_plant_cat or has_plant_in_caption:
+            for tree in TREE_LABELS:
+                tree_lower = tree.lower()
+                if tree_lower in caption_lower:
+                    detected_species.append(tree)
+                    continue
+                # For multi-word tree names like "japanese maple", check if all words match
+                if " " in tree:
+                    words = tree_lower.split()
+                    word_matches = sum(1 for w in words if w in caption_lower)
+                    if word_matches >= 2 and word_matches == len(words):
+                        detected_species.append(tree)
+
         # Remove duplicates while preserving order
         seen = set()
         unique_species = []
@@ -921,8 +1028,8 @@ class ImageRecognitionService:
 
     def _should_validate_species(self, candidates: list[str]) -> bool:
         """Check if we should do species-level validation based on candidates."""
-        animal_categories = {"dog", "cat", "bird", "fish", "horse", "cow", "sheep", "pig", "animal", "pet", "mammal", "wildlife", "creature", "beast"}
-        plant_categories = {"flower", "tree", "plant", "fruit", "vegetable", "grass", "leaf", "garden", "blossom", "bloom", "foliage", "botanical"}
+        animal_categories = {"dog", "cat", "bird", "fish", "horse", "cow", "sheep", "pig", "animal", "pet", "mammal", "wildlife", "wild animal", "wild animals", "creature", "beast"}
+        plant_categories = {"flower", "tree", "plant", "plants", "fruit", "vegetable", "grass", "leaf", "garden", "blossom", "bloom", "foliage", "botanical", "flora"}
         return any(cat in candidates for cat in animal_categories | plant_categories)
 
     def _get_targeted_species_labels(self, candidates: list[str], caption: str) -> list[str]:
@@ -939,12 +1046,15 @@ class ImageRecognitionService:
         # Check for cat
         if "cat" in candidates or "cat" in caption_lower:
             targets.extend(CAT_LABELS)
-        # Check for flower
-        if "flower" in candidates or "flower" in caption_lower:
+        # Check for flower or plant/flora
+        if any(cat in candidates for cat in ["flower", "flowers", "plant", "plants", "flora", "blossom", "bloom", "botanical"]):
             targets.extend(FLOWER_LABELS)
         # Check for tree
         if "tree" in candidates or "tree" in caption_lower:
             targets.extend(TREE_LABELS)
+        # Check for wildlife
+        if any(cat in candidates for cat in ["wildlife", "wild animal", "wild animals", "animal", "animals"]):
+            targets.extend(WILDLIFE_LABELS)
 
         # If no specific category found, use all species labels
         if not targets:
@@ -958,6 +1068,9 @@ class ImageRecognitionService:
 
         For example: if results contain both 'dog' and 'golden retriever', only keep
         'golden retriever' since it is more specific.
+
+        Also removes labels that are substrings of other labels (e.g., 'bird' when
+        'bird sparrow' is present, or 'bird sparrow' when 'house sparrow' is present).
         """
         if not results:
             return results
@@ -973,6 +1086,14 @@ class ImageRecognitionService:
                     if specific_label.lower() in result_labels:
                         generic_labels_to_remove.add(result["label"])
                         break
+
+        for result in results:
+            label = result["label"].lower()
+            for other_label in result_labels:
+                other_lower = other_label.lower()
+                if label != other_lower and (label in other_lower or label.replace(" ", "") in other_lower.replace(" ", "")):
+                    generic_labels_to_remove.add(result["label"])
+                    break
 
         deduplicated = [r for r in results if r["label"] not in generic_labels_to_remove]
         logger.debug("After label deduplication: removed generic labels %s, kept %s", generic_labels_to_remove, [r["label"] for r in deduplicated])

@@ -109,10 +109,16 @@
               </div>
             </div>
 
-            <label class="toggle">
-              <input id="recursive" name="recursive" type="checkbox" checked />
-              <span>递归扫描子目录</span>
-            </label>
+            <div class="toggle-row">
+              <label class="toggle">
+                <input id="recursive" name="recursive" type="checkbox" checked />
+                <span>递归扫描子目录</span>
+              </label>
+              <label class="toggle">
+                <input id="enable_score_summary" name="enable_score_summary" type="checkbox" />
+                <span>评分总结</span>
+              </label>
+            </div>
 
             <div class="button-group">
               <button id="submit-btn" class="primary-btn" type="submit">开始批量处理</button>

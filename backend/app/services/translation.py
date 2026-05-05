@@ -5,8 +5,16 @@ from __future__ import annotations
 import logging
 from typing import Optional
 import difflib
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
+
+try:
+    from deep_translator import GoogleTranslator
+    DEEP_TRANSLATOR_AVAILABLE = True
+except ImportError:
+    DEEP_TRANSLATOR_AVAILABLE = False
+    logger.warning("deep-translator not installed, API translation will not be available")
 
 # 扩展的英文到中文的翻译字典
 # 包含单词、短语和复合词
@@ -203,6 +211,9 @@ EXTENDED_LABEL_TRANSLATIONS = {
     "swan": "天鹅",
     "goose": "鹅",
     "duck": "鸭子",
+    "ducks": "鸭子",
+    "goose": "鹅",
+    "geese": "鹅",
     "heron": "鹭",
     "crane": "鹤",
     "penguin": "企鹅",
@@ -243,6 +254,7 @@ EXTENDED_LABEL_TRANSLATIONS = {
     # 昆虫和微距相关
     "insect": "昆虫",
     "butterfly": "蝴蝶",
+    "butterflies": "蝴蝶",
     "bee": "蜜蜂",
     "ant": "蚂蚁",
     "beetle": "甲虫",
@@ -739,126 +751,292 @@ EXTENDED_LABEL_TRANSLATIONS = {
     "organic": "有机",
     "structured": "结构化",
     "flowing": "流畅",
+    
+    # 狗品种
+    "golden retriever": "金毛寻回犬",
+    "labrador": "拉布拉多",
+    "bulldog": "斗牛犬",
+    "poodle": "贵宾犬",
+    "beagle": "比格犬",
+    "German shepherd": "德国牧羊犬",
+    "husky": "哈士奇",
+    "corgi": "柯基犬",
+    "shiba inu": "柴犬",
+    "dalmatian": "斑点狗",
+    
+    # 猫品种
+    "persian cat": "波斯猫",
+    "siamese cat": "暹罗猫",
+    "british shorthair": "英国短毛猫",
+    "ragdoll": "布偶猫",
+    "maine coon": "缅因猫",
+    "sphynx cat": "斯芬克斯猫",
+    
+    # 花卉
+    "rose": "玫瑰",
+    "sunflower": "向日葵",
+    "tulip": "郁金香",
+    "daisy": "雏菊",
+    "lily": "百合",
+    "orchid": "兰花",
+    "lotus": "莲花",
+    "cherry blossom": "樱花",
+    "lavender": "薰衣草",
+    "marigold": "金盏花",
+    "hibiscus": "木槿",
+    "jasmine": "茉莉",
+    
+    # 树木
+    "pine tree": "松树",
+    "oak tree": "橡树",
+    "maple tree": "枫树",
+    "palm tree": "棕榈树",
+    "cherry tree": "樱桃树",
+    "bamboo": "竹子",
+    "willow": "柳树",
+    "cypress": "柏树",
+    "cedar": "雪松",
+    
+    # 植物
+    "grass": "草",
+    "cactus": "仙人掌",
+    "fern": "蕨类",
+    "moss": "苔藓",
+    "bamboo plant": "竹类植物",
+    "bush": "灌木",
+    "succulent": "多肉植物",
+    "vine": "藤蔓",
+    "mushroom": "蘑菇",
+    
+    # 水果
+    "apple": "苹果",
+    "banana": "香蕉",
+    "orange": "橙子",
+    "grape": "葡萄",
+    "strawberry": "草莓",
+    "watermelon": "西瓜",
+    "pineapple": "菠萝",
+    "mango": "芒果",
+    "peach": "桃子",
+    "cherry": "樱桃",
+    
+    # 蔬菜
+    "carrot": "胡萝卜",
+    "tomato": "番茄",
+    "potato": "土豆",
+    "broccoli": "西兰花",
+    "lettuce": "生菜",
+    "corn": "玉米",
+    "cucumber": "黄瓜",
+    "pepper": "辣椒",
+    "onion": "洋葱",
+    "garlic": "大蒜",
+    
+    # 昆虫
+    "butterfly": "蝴蝶",
+    "bee": "蜜蜂",
+    "ladybug": "瓢虫",
+    "dragonfly": "蜻蜓",
+    "spider": "蜘蛛",
+    "ant": "蚂蚁",
+    "beetle": "甲虫",
+    "moth": "飞蛾",
+    "grasshopper": "蚱蜢",
+    
+    # 海洋生物
+    "fish": "鱼",
+    "goldfish": "金鱼",
+    "koi": "锦鲤",
+    "shark": "鲨鱼",
+    "dolphin": "海豚",
+    "whale": "鲸鱼",
+    "jellyfish": "水母",
+    "turtle": "海龟",
+    "crab": "螃蟹",
+    "lobster": "龙虾",
+    
+    # 动物
+    "elephant": "大象",
+    "lion": "狮子",
+    "tiger": "老虎",
+    "giraffe": "长颈鹿",
+    "zebra": "斑马",
+    "monkey": "猴子",
+    "bear": "熊",
+    "panda": "熊猫",
+    "koala": "考拉",
+    "fox": "狐狸",
+    "rabbit": "兔子",
+    "deer": "鹿",
+    "wolf": "狼",
+    "horse": "马",
+    "cow": "牛",
+    "pig": "猪",
+    "sheep": "羊",
+    "goat": "山羊",
 }
 
 
 class TranslationService:
-    """Service for translating English labels to Chinese with advanced matching."""
-    
+    """Service for translating English labels to Chinese with API fallback.
+
+    Translation strategy:
+    1. First try exact match in local dictionary (fast, no API calls)
+    2. For compound words, try word-by-word translation (only if all parts have translations)
+    3. For remaining labels, use Google Translate API
+    4. Cache all translations to minimize API calls
+    """
+
     def __init__(self, translations: Optional[dict] = None):
         """Initialize translation service.
-        
+
         Args:
             translations: Dictionary mapping English labels to Chinese.
                          If None, uses EXTENDED_LABEL_TRANSLATIONS.
         """
         self.translations = translations or EXTENDED_LABEL_TRANSLATIONS
-        # Create a lowercase lookup dictionary for case-insensitive matching
         self.lowercase_lookup = {k.lower(): v for k, v in self.translations.items()}
-    
+        self._api_cache: dict[str, str] = {}
+        self._translator = None
+        if DEEP_TRANSLATOR_AVAILABLE:
+            try:
+                self._translator = GoogleTranslator(source='en', target='zh-CN')
+            except Exception as exc:
+                logger.warning("Failed to initialize Google Translator: %s", exc)
+
     def translate(self, label: str, language: str = "en") -> str:
         """Translate a label to the specified language.
-        
+
         Args:
             label: The English label to translate
             language: Target language ('en' for English, 'zh' for Chinese)
-            
+
         Returns:
             Translated label if found, otherwise original label
         """
         if language != "zh" or not isinstance(label, str):
             return label
-        
-        # Try exact match first
+
+        key = label.strip().lower()
+        if not key:
+            return label
+
         exact_match = self._exact_match(label)
         if exact_match:
             return exact_match
-        
-        # Try word-by-word translation for compound labels
+
         translated = self._translate_compound(label)
         if translated != label:
             return translated
-        
-        # Try fuzzy matching as last resort
-        fuzzy_match = self._fuzzy_match(label)
-        if fuzzy_match:
-            return fuzzy_match
-        
+
+        api_translation = self._translate_via_api(key)
+        if api_translation:
+            return api_translation
+
         return label
-    
+
     def _exact_match(self, label: str) -> Optional[str]:
         """Try exact match (case-insensitive) on the label."""
         key = label.strip().lower()
-        
-        # Direct lookup
+
         if key in self.lowercase_lookup:
             return self.lowercase_lookup[key]
-        
-        # Try replacing underscores/hyphens with spaces
+
         key_spaces = key.replace("_", " ").replace("-", " ").strip()
         if key_spaces in self.lowercase_lookup:
             return self.lowercase_lookup[key_spaces]
-        
+
         return None
-    
+
     def _translate_compound(self, label: str) -> str:
         """Translate compound words by breaking them into parts."""
         key = label.strip().lower()
         key_spaces = key.replace("_", " ").replace("-", " ").strip()
-        
-        # Split into words
+
         parts = key_spaces.split()
         if not parts:
             return label
-        
+
         translated_parts = []
         for part in parts:
             if not part:
                 continue
-            
-            # Try to find exact match for each part
+
             if part in self.lowercase_lookup:
                 translated_parts.append(self.lowercase_lookup[part])
             else:
-                # Keep original if no translation found
                 translated_parts.append(part)
-        
-        # If all parts were translated, return the joined result
-        if translated_parts and any(p in self.lowercase_lookup.values() for p in translated_parts):
+
+        if translated_parts and all(p in self.lowercase_lookup.values() for p in translated_parts):
             return "_".join(translated_parts)
-        
+
         return label
-    
-    def _fuzzy_match(self, label: str, threshold: float = 0.6) -> Optional[str]:
-        """Try fuzzy matching using sequence matching.
-        
+
+    def _translate_via_api(self, label: str) -> Optional[str]:
+        """Translate using Google Translate API with fallback to MyMemory.
+
         Args:
-            label: The label to match
-            threshold: Minimum similarity score (0.0 to 1.0)
-            
+            label: The label to translate (already lowercased and stripped)
+
         Returns:
-            Translated label if match found, None otherwise
+            Translated label if API call succeeds, None otherwise
         """
-        key = label.strip().lower()
-        best_match = None
-        best_score = threshold
-        
-        for trans_key in self.lowercase_lookup.keys():
-            # Use difflib for similarity matching
-            similarity = difflib.SequenceMatcher(None, key, trans_key).ratio()
-            if similarity > best_score:
-                best_score = similarity
-                best_match = trans_key
-        
-        return self.lowercase_lookup.get(best_match) if best_match else None
-    
+        if label in self._api_cache:
+            return self._api_cache[label]
+
+        if DEEP_TRANSLATOR_AVAILABLE and self._translator:
+            try:
+                result = self._translator.translate(label)
+                if result and result != label:
+                    self._api_cache[label] = result
+                    logger.debug("API translated '%s' to '%s'", label, result)
+                    return result
+            except Exception as exc:
+                logger.warning("Google API translation failed for '%s': %s", label, exc)
+
+        fallback_result = self._translate_via_mymemory(label)
+        if fallback_result:
+            self._api_cache[label] = fallback_result
+            return fallback_result
+
+        return None
+
+    def _translate_via_mymemory(self, label: str) -> Optional[str]:
+        """Translate using MyMemory API as fallback (free, no API key required).
+
+        Args:
+            label: The label to translate
+
+        Returns:
+            Translated label if API call succeeds, None otherwise
+        """
+        try:
+            import urllib.request
+            import urllib.parse
+            import json
+
+            url = f"https://api.mymemory.translated.net/get?q={urllib.parse.quote(label)}&langpair=en|zh-CN"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode("utf-8"))
+                if data.get("responseStatus") == 200:
+                    translated = data.get("responseData", {}).get("translatedText", "")
+                    if translated and translated.lower() != label.lower():
+                        logger.debug("MyMemory translated '%s' to '%s'", label, translated)
+                        return translated
+        except Exception as exc:
+            logger.debug("MyMemory API translation failed for '%s': %s", label, exc)
+
+        return None
+
     def translate_labels(self, labels: list[str], language: str = "en") -> list[str]:
         """Translate a list of labels.
-        
+
         Args:
             labels: List of English labels
             language: Target language
-            
+
         Returns:
             List of translated labels
         """

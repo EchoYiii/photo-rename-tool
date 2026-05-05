@@ -313,6 +313,9 @@ input {
   background: var(--accent-soft);
   color: var(--accent-strong);
   font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 #confidence_threshold {
@@ -329,6 +332,13 @@ input {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  margin: 4px 0 20px;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 24px;
   margin: 4px 0 20px;
 }
 

@@ -19,7 +19,7 @@ class Settings:
     MAX_UPLOAD_SIZE = 50 * 1024 * 1024
     ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff"}
 
-    MODEL_NAME = os.getenv("MODEL_NAME", "nlpconnect/vit-gpt2-image-captioning")
+    MODEL_NAME = os.getenv("MODEL_NAME", "florence-community/Florence-2-base-ft")
     VALIDATION_MODEL_NAME = os.getenv(
         "VALIDATION_MODEL_NAME",
         "google/siglip2-base-patch16-224",
@@ -45,7 +45,7 @@ class Settings:
     }
     DEVICE_PREFERENCE = os.getenv("DEVICE_PREFERENCE", "cpu").lower()
     CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.05"))
-    MAX_LABELS = int(os.getenv("MAX_LABELS", "3"))
+    MAX_LABELS = int(os.getenv("MAX_LABELS", "5"))
     DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
     ALLOWED_ORIGINS = [

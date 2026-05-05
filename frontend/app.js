@@ -120,10 +120,16 @@ function renderMeta(info) {
     populateElementModelOptions(info.element_models, info.element_model);
   }
 
+  const currentElementModel = info.element_model || info.model;
+  const elementModelsList = info.element_models
+    ? info.element_models.map(m => m.label).join('、')
+    : currentElementModel;
+  const deviceDisplay = info.cuda_available ? 'CPU、GPU' : 'CPU';
+
   metaList.innerHTML = `
     <div>
       <p class="field-label">当前元素提取模型</p>
-      <p>${info.element_model || info.model}</p>
+      <p>${elementModelsList}</p>
     </div>
     <div>
       <p class="field-label">候选校验模型</p>
@@ -139,14 +145,13 @@ function renderMeta(info) {
     </div>
     <div>
       <p class="field-label">运行设备</p>
-      <p>${info.device || (info.cuda_available ? 'cuda' : 'cpu')}</p>
+      <p>${deviceDisplay}</p>
     </div>
   `;
 
   setConfidenceValue(info.confidence_threshold);
   const maxLabelsInput = document.getElementById('max_labels');
   if (maxLabelsInput) {
-    maxLabelsInput.max = info.max_labels;
     maxLabelsInput.value = info.max_labels;
   }
   serverMaxLabels = info.max_labels;
@@ -347,6 +352,7 @@ form.addEventListener('submit', async (event) => {
   const payload = {
     source_path: document.getElementById('source_path').value.trim(),
     output_path: document.getElementById('output_path').value.trim(),
+    enable_score_summary: document.getElementById('enable_score_summary').checked,
     confidence_threshold: Number(confidenceRange.value),
     max_labels: maxLabels,
     recursive: document.getElementById('recursive').checked,

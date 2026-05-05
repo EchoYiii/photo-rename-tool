@@ -94,11 +94,10 @@ def _generate_score_excel(results: list[dict], errors: list[dict], output_path: 
         renamed_name = result.get("renamed_filename", "")
         status = result.get("status", "")
         labels = result.get("labels", [])
-        
-        # 获取照片类型（从标签中提取）
-        photo_type = ""
+        photo_type = result.get("photo_type", "")
+
         max_confidence = 0.0
-        
+
         for label in labels:
             confidence = label.get("confidence_percentage", 0)
             if confidence > max_confidence:
@@ -230,7 +229,7 @@ def translate_label(label: str, language: str) -> str:
 class DirectoryProcessRequest(BaseModel):
     source_path: str = Field(..., description="Directory containing images to process.")
     output_path: str = Field(..., description="Directory to write renamed images into.")
-    score_output_path: str = Field(default="", description="Optional path to output score Excel file.")
+    enable_score_summary: bool = Field(default=False, description="Whether to generate score summary Excel file.")
     recursive: bool = Field(default=True, description="Whether to scan subdirectories.")
     confidence_threshold: float = Field(default=settings.CONFIDENCE_THRESHOLD, ge=0.0, le=1.0)
     # Allow clients to submit any integer >=1 and clamp server-side to the configured maximum.
@@ -331,7 +330,8 @@ def _process_directory_sync(job_id: str, payload: DirectoryProcessRequest, image
             # 根据用户选择构建标签列表
             final_labels = []
             language = payload.label_language
-            
+            photo_type = ""
+
             # 1. 相机制造商（如果用户选择包含）
             if payload.include_camera:
                 camera_make = get_camera_make(image_path)
@@ -340,7 +340,7 @@ def _process_directory_sync(job_id: str, payload: DirectoryProcessRequest, image
                     final_labels.append(camera_make)
                 else:
                     final_labels.append("unknown")
-            
+
             # 2. 照片类型（如果用户选择包含）- 使用CLIP分类器的14大类结果
             if payload.include_type:
                 category_en = recognition.get("category_en")
@@ -381,6 +381,7 @@ def _process_directory_sync(job_id: str, payload: DirectoryProcessRequest, image
                         "original_filename": original_name,
                         "renamed_filename": os.path.basename(output_path),
                         "labels": [],
+                        "photo_type": photo_type,
                         "status": "kept_original_name",
                         "message": "No elements met the confidence threshold, so the original filename was kept.",
                     }
@@ -413,6 +414,7 @@ def _process_directory_sync(job_id: str, payload: DirectoryProcessRequest, image
                         "original_filename": original_name,
                         "renamed_filename": os.path.basename(output_path),
                         "labels": display_labels,
+                        "photo_type": photo_type,
                         "status": "renamed",
                     }
                 )
@@ -454,11 +456,15 @@ def _process_directory_sync(job_id: str, payload: DirectoryProcessRequest, image
         job["total_duration_formatted"] = "< 1 秒"
 
     # 生成照片评分Excel表格
-    if payload.score_output_path:
+    if payload.enable_score_summary:
         try:
-            _generate_score_excel(results, errors, payload.score_output_path)
-            logger.info(f"Score Excel file generated at: {payload.score_output_path}")
-            job["score_output_path"] = payload.score_output_path
+            import time
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            excel_filename = f"photo_scores_{timestamp}.xlsx"
+            excel_path = os.path.join(payload.output_path, excel_filename)
+            _generate_score_excel(results, errors, excel_path)
+            logger.info(f"Score Excel file generated at: {excel_path}")
+            job["score_output_path"] = excel_path
         except Exception as e:
             logger.exception(f"Failed to generate score Excel: {e}")
 
