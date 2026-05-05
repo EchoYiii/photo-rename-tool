@@ -1,5 +1,7 @@
 # Photo Rename Tool
 
+项目说明：https://my.feishu.cn/wiki/BulCw3sqhi5xOokthfpcgbWinCe
+
 This project is a local web-based photo renaming tool with multi-model support:
 
 - Scan a source directory for supported image formats in batch
